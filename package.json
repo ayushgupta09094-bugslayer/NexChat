@@ -1,0 +1,20 @@
+{
+  "name": "nexchat",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "node scripts/build.mjs",
+    "preview": "vite --host 0.0.0.0",
+    "deploy": "npm run build && firebase deploy --only hosting,firestore",
+    "deploy:hosting": "npm run build && firebase deploy --only hosting",
+    "deploy:firestore": "firebase deploy --only firestore"
+  },
+  "devDependencies": {
+    "vite": "^5.3.1"
+  },
+  "dependencies": {
+    "firebase": "^12.12.1",
+    "git": "^0.1.5"
+  }
+}

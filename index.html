@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>NexChat — Premium Messaging</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet"/>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css"/>
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+  <!-- ═══════ LOADING SCREEN ═══════ -->
+  <div id="loading-screen">
+    <div class="loading-logo-wrap">
+      <div class="loading-logo-box">
+        <i class="fa-solid fa-bolt-lightning"></i>
+      </div>
+      <div class="loading-app-name">NexChat</div>
+      <div class="loading-tagline">Premium Messaging</div>
+    </div>
+    <div class="loading-bar-wrap">
+      <div class="loading-bar"></div>
+    </div>
+  </div>
+  <!-- ═══════ AUTH SCREEN ═══════ -->
+  <div id="auth-screen">
+    <div class="auth-card">
+      <div class="auth-logo-section">
+        <div class="auth-logo-box"><i class="fa-solid fa-bolt-lightning"></i></div>
+        <div class="auth-app-name">NexChat</div>
+        <div class="auth-tagline">Premium · Secure · Real-time</div>
+      </div>
+      <div class="auth-tabs">
+        <button class="auth-tab active" id="tab-login" onclick="switchTab('login')">Sign In</button>
+        <button class="auth-tab" id="tab-signup" onclick="switchTab('signup')">Sign Up</button>
+      </div>
+      <div class="auth-body">
+        <!-- LOGIN FORM -->
+        <form class="auth-form" id="login-form" onsubmit="handleLogin(event)">
+          <div>
+            <div class="field-label">Email Address</div>
+            <div class="input-wrap">
+              <input type="email" id="login-email" placeholder="you@example.com" required/>
+              <i class="fa-solid fa-envelope"></i>
+            </div>
+          </div>
+          <div>
+            <div class="field-label">Password</div>
+            <div class="input-wrap">
+              <input type="password" id="login-password" placeholder="Your password" required/>
+              <i class="fa-solid fa-lock"></i>
+            </div>
+          </div>
+          <div class="auth-error" id="login-error"></div>
+          <button class="auth-btn" type="submit" id="login-btn">Sign In to NexChat</button>
+        </form>
+        <!-- SIGNUP FORM -->
+        <form class="auth-form" id="signup-form" style="display:none" onsubmit="handleSignup(event)">
+          <div>
+            <div class="field-label">Full Name</div>
+            <div class="input-wrap">
+              <input type="text" id="signup-name" placeholder="Your full name" required minlength="2"/>
+              <i class="fa-solid fa-user"></i>
+            </div>
+          </div>
+          <div>
+            <div class="field-label">Email Address</div>
+            <div class="input-wrap">
+              <input type="email" id="signup-email" placeholder="you@example.com" required/>
+              <i class="fa-solid fa-envelope"></i>
+            </div>
+          </div>
+          <div>
+            <div class="field-label">Password</div>
+            <div class="input-wrap">
+              <input type="password" id="signup-password" placeholder="Min. 6 characters" required minlength="6"/>
+              <i class="fa-solid fa-lock"></i>
+            </div>
+          </div>
+          <div>
+            <div class="field-label">Confirm Password</div>
+            <div class="input-wrap">
+              <input type="password" id="signup-confirm" placeholder="Repeat password" required/>
+              <i class="fa-solid fa-shield-halved"></i>
+            </div>
+          </div>
+          <div class="auth-error" id="signup-error"></div>
+          <button class="auth-btn" type="submit" id="signup-btn">Create NexChat Account</button>
+        </form>
+      </div>
+    </div>
+  </div>
+  <!-- ═══════ MAIN APP ═══════ -->
+  <div id="app-screen">
+    <div class="app-layout">
+      <!-- ── SIDEBAR ── -->
+      <div class="sidebar" id="sidebar">
+        <!-- Profile Slide Panel -->
+        <div class="profile-panel" id="profile-panel">
+          <div class="profile-panel-hdr">
+            <button class="icon-btn" onclick="toggleProfile()"><i class="fa-solid fa-arrow-left"></i></button>
+            <h2>My Profile</h2>
+          </div>
+          <div class="profile-content">
+            <div class="profile-avatar-wrap">
+              <div class="profile-av-big" id="profile-av-big">N</div>
+              <div class="profile-display-name" id="profile-disp-name">Username</div>
+              <div class="profile-display-email" id="profile-disp-email">email@example.com</div>
+              <div class="premium-badge">
+                <i class="fa-solid fa-crown"></i> Premium Member
+              </div>
+            </div>
+            <div class="profile-info-card">
+              <div class="profile-info-label">About</div>
+              <div class="profile-info-val">Living the premium life ⚡</div>
+            </div>
+            <div class="profile-info-card">
+              <div class="profile-info-label">Member Since</div>
+              <div class="profile-info-val" id="profile-since">—</div>
+            </div>
+            <button class="logout-btn" onclick="handleLogout()">
+              <i class="fa-solid fa-right-from-bracket"></i> Sign Out
+            </button>
+          </div>
+        </div>
+        <!-- New Conversation Slide Panel -->
+        <div class="new-conv-panel" id="new-conv-panel">
+          <div class="panel-hdr">
+            <button class="icon-btn" onclick="toggleNewConv()"><i class="fa-solid fa-arrow-left"></i></button>
+            <h2>New Conversation</h2>
+          </div>
+          <div class="panel-search">
+            <div class="search-wrap">
+              <i class="fa-solid fa-magnifying-glass"></i>
+              <input type="text" id="user-search-inp" placeholder="Search by name or email…" oninput="filterUsers()"/>
+            </div>
+          </div>
+          <div class="users-list" id="users-list">
+            <div class="spinner"></div>
+          </div>
+        </div>
+        <!-- Sidebar Header -->
+        <div class="sidebar-header">
+          <div class="brand-section">
+            <div class="brand-logo"><i class="fa-solid fa-bolt-lightning"></i></div>
+            <span class="brand-name">NexChat</span>
+          </div>
+          <div class="sidebar-actions">
+            <button class="icon-btn" onclick="toggleNewConv()" title="New Conversation">
+              <i class="fa-solid fa-pen-to-square"></i>
+            </button>
+            <button class="icon-btn" onclick="toggleProfile()" title="My Profile">
+              <i class="fa-solid fa-circle-user"></i>
+            </button>
+          </div>
+        </div>
+        <!-- Search Bar -->
+        <div class="sidebar-search">
+          <div class="search-wrap">
+            <i class="fa-solid fa-magnifying-glass"></i>
+            <input type="text" id="chat-search" placeholder="Search conversations…" oninput="filterChats()"/>
+          </div>
+        </div>
+        <div class="section-label">Conversations</div>
+        <!-- Chats List -->
+        <div class="chats-list" id="chats-list">
+          <div class="no-chats-msg" id="no-chats-msg">
+            <i class="fa-solid fa-comments"></i>
+            <p>No conversations yet.<br/>Hit the pencil icon to start one!</p>
+          </div>
+        </div>
+        <!-- Floating Action Button -->
+        <button class="fab-btn" onclick="toggleNewConv()" title="New Chat">
+          <i class="fa-solid fa-plus"></i>
+        </button>
+      </div>
+      <!-- ── CHAT AREA ── -->
+      <div class="chat-area" id="chat-area">
+        <!-- Empty / Welcome State -->
+        <div class="chat-empty" id="chat-empty">
+          <div class="empty-logo"><i class="fa-solid fa-bolt-lightning"></i></div>
+          <h2>Welcome to NexChat</h2>
+          <p>Conversations that feel as premium as you are.<br/>Select a chat or start a new conversation.</p>
+          <div class="enc-note">
+            <i class="fa-solid fa-lock"></i>
+            Protected with Firebase Auth + Firestore rules
+          </div>
+        </div>
+        <!-- Active Chat View -->
+        <div id="active-chat">
+          <!-- Chat Header -->
+          <div class="chat-header">
+            <button class="icon-btn back-btn" onclick="closeMobileChat()">
+              <i class="fa-solid fa-arrow-left"></i>
+            </button>
+            <div class="c-avatar" id="chat-h-av" style="width:40px;height:40px;border-radius:12px;font-size:15px">N</div>
+            <div class="chat-header-info">
+              <div class="chat-h-name" id="chat-h-name">Contact</div>
+              <div class="chat-h-status" id="chat-h-status">online</div>
+            </div>
+            <button class="icon-btn"><i class="fa-solid fa-magnifying-glass"></i></button>
+            <button class="icon-btn"><i class="fa-solid fa-phone"></i></button>
+            <button class="icon-btn"><i class="fa-solid fa-ellipsis-vertical"></i></button>
+          </div>
+          <!-- Messages -->
+          <div class="messages-area" id="messages-area">
+            <div class="typing-bubble" id="typing-bubble">
+              <div class="typing-dots"><span></span><span></span><span></span></div>
+            </div>
+          </div>
+          <!-- Message Input -->
+          <div class="chat-input-area">
+            <button class="input-icon-btn"><i class="fa-regular fa-face-smile"></i></button>
+            <div class="msg-input-wrap">
+              <textarea
+                id="message-input"
+                rows="1"
+                placeholder="Message…"
+                onkeydown="onMsgKey(event)"
+                oninput="autoGrow(this)"
+              ></textarea>
+            </div>
+            <button class="input-icon-btn"><i class="fa-solid fa-paperclip"></i></button>
+            <button class="send-btn" id="send-btn" onclick="sendMessage()">
+              <i class="fa-solid fa-paper-plane"></i>
+            </button>
+          </div>
+        </div>
+      </div><!-- /chat-area -->
+    </div>
+  </div>
+  <!-- Toast Notification -->
+  <div id="toast"></div>
+  <!-- ═══════ SCRIPTS ═══════ -->
+  <script type="module" src="app.js"></script>
+</body>
+</html>

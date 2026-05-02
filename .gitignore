@@ -1,0 +1,17 @@
+# Firebase
+.firebase/
+firebase-debug.log
+firestore-debug.log
+ui-debug.log
+
+# Environment / secrets
+.env
+.env.local
+.env.production
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Node (if added later)
+node_modules/
