@@ -19,6 +19,11 @@ import {
   addIceCandidateToCall,
   listenCallDoc,
   listenIceCandidates,
+  deleteMessages,
+  deleteWholeChat,
+  blockContact,
+  isContactBlocked,
+  stopMessagesListener,
   friendlyErr
 } from "./firebase.js";
 // ════════════════════════════════════════════════════════════
@@ -42,6 +47,12 @@ let currentCallRole  = null;
 let isMuted          = false;
 let isCameraOff      = false;
 let cameraStream     = null;
+let currentMessages  = [];
+let chatSearchQuery  = "";
+let selectionMode    = false;
+let selectedMessageIds = new Set();
+let currentContactData = null;
+let contactBlocked   = false;
 const RTC_CONFIG = {
   iceServers: [
     { urls: "stun:stun.l.google.com:19302" },
@@ -178,6 +189,60 @@ function triggerLocalDownload(url, name) {
   document.body.appendChild(a);
   a.click();
   a.remove();
+}
+function escapeRegExp(str = "") {
+  return String(str).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+function highlightEsc(text = "", query = "") {
+  const safe = esc(text);
+  const q = String(query || "").trim();
+  if (!q) return safe;
+  const parts = q.split(/\s+/).filter(Boolean).slice(0, 6).map(escapeRegExp);
+  if (!parts.length) return safe;
+  const re = new RegExp(`(${parts.join("|")})`, "ig");
+  return safe.replace(re, '<mark class="msg-highlight">$1</mark>');
+}
+function messageMatchesSearch(msg, query = "") {
+  const q = String(query || "").trim().toLowerCase();
+  if (!q) return true;
+  const hay = [
+    msg.text, msg.fileName, msg.senderName, msg.type, fmtDateLabel(msg.timestamp), fmtTime(msg.timestamp)
+  ].map(v => String(v || "").toLowerCase()).join(" ");
+  return q.split(/\s+/).filter(Boolean).every(part => hay.includes(part));
+}
+function closeFloatingPanels() {
+  $("chat-menu")?.classList.remove("show");
+}
+function updateComposerState() {
+  const blocked = !!contactBlocked;
+  const input = $("message-input");
+  const send = $("send-btn");
+  const attach = $("attach-btn");
+  const camera = $("camera-send-btn");
+  [input, send, attach, camera].forEach(el => {
+    if (!el) return;
+    el.disabled = blocked;
+    el.classList.toggle("disabled", blocked);
+  });
+  if (input) input.placeholder = blocked ? "Messaging is disabled because this contact is blocked." : "Message…";
+}
+function resetActiveChatUI() {
+  currentChatId = null;
+  currentContactId = null;
+  currentContactData = null;
+  currentMessages = [];
+  chatSearchQuery = "";
+  selectionMode = false;
+  selectedMessageIds.clear();
+  contactBlocked = false;
+  stopMessagesListener?.();
+  $("active-chat").style.display = "none";
+  $("chat-empty").style.display = "flex";
+  $("chat-search-panel")?.classList.remove("show");
+  $("message-select-bar")?.classList.remove("show");
+  $("chat-menu")?.classList.remove("show");
+  updateComposerState();
+  document.querySelectorAll(".chat-item").forEach(el => el.classList.remove("active"));
 }
 // ════════════════════════════════════════════════════════════
 //  TOAST
@@ -483,6 +548,9 @@ async function openChat(contactUid, contactName) {
   );
   // Fetch contact data
   const cData = await getUserData(contactUid) || {};
+  currentContactData = cData;
+  const blockState = await isContactBlocked(currentUser.uid, contactUid).catch(() => ({ iBlocked: false, theyBlocked: false, blocked: false }));
+  contactBlocked = !!blockState.blocked;
   const displayName = cData.name || contactName || "NexUser";
   // Update header
   $("chat-h-name").textContent = displayName;
@@ -512,6 +580,14 @@ async function openChat(contactUid, contactName) {
   if (ci) ci.classList.add("active");
   // Mobile: show chat area
   if (window.innerWidth <= 720) $("chat-area").classList.add("mobile-active");
+  // Reset chat tools
+  chatSearchQuery = "";
+  selectionMode = false;
+  selectedMessageIds.clear();
+  $("chat-search-panel")?.classList.remove("show");
+  if ($("chat-search-input")) $("chat-search-input").value = "";
+  updateSelectionToolbar();
+  updateComposerState();
   // Start listening to messages
   startMessagesListener(currentChatId);
 }
@@ -520,10 +596,29 @@ async function openChat(contactUid, contactName) {
 //  MESSAGES — Callback from firebase.js
 // ════════════════════════════════════════════════════════════
 export function onMessagesUpdate(msgs) {
+  currentMessages = Array.isArray(msgs) ? msgs : [];
+  renderMessages();
+}
+
+function renderMessages() {
   const area = $("messages-area");
+  if (!area) return;
   area.innerHTML = "";
+
+  const q = String(chatSearchQuery || "").trim();
+  const displayMsgs = q
+    ? currentMessages.filter(msg => messageMatchesSearch(msg, q))
+    : currentMessages;
+
+  if (q) {
+    const note = document.createElement("div");
+    note.className = "search-result-note";
+    note.innerHTML = `<i class="fa-solid fa-magnifying-glass"></i> ${displayMsgs.length} result${displayMsgs.length === 1 ? "" : "s"} for <strong>${esc(q)}</strong>`;
+    area.appendChild(note);
+  }
+
   let lastDateLabel = "";
-  msgs.forEach(msg => {
+  displayMsgs.forEach(msg => {
     const dLabel = fmtDateLabel(msg.timestamp);
     if (dLabel !== lastDateLabel) {
       lastDateLabel = dLabel;
@@ -534,14 +629,133 @@ export function onMessagesUpdate(msgs) {
     }
     area.appendChild(buildBubble(msg));
   });
-  if (!msgs.length) {
-    area.innerHTML = '<div class="date-sep"><span>Send your first message ⚡</span></div>';
+
+  if (!displayMsgs.length) {
+    area.innerHTML += q
+      ? '<div class="date-sep"><span>No matching message found</span></div>'
+      : '<div class="date-sep"><span>Send your first message ⚡</span></div>';
   }
+
   // Restore typing indicator at bottom
   const tb = $("typing-bubble");
   if (tb) area.appendChild(tb);
   area.scrollTop = area.scrollHeight;
 }
+
+function updateSelectionToolbar() {
+  const bar = $("message-select-bar");
+  if (!bar) return;
+  bar.classList.toggle("show", !!selectionMode);
+  const count = selectedMessageIds.size;
+  if ($("selected-count")) $("selected-count").textContent = `${count} selected`;
+  const btn = $("delete-selected-btn");
+  if (btn) btn.disabled = count === 0;
+}
+
+window.toggleSelectMode = function(force) {
+  selectionMode = typeof force === "boolean" ? force : !selectionMode;
+  selectedMessageIds.clear();
+  closeFloatingPanels();
+  updateSelectionToolbar();
+  renderMessages();
+};
+
+window.toggleMessageSelection = function(messageId) {
+  if (!selectionMode || !messageId) return;
+  if (selectedMessageIds.has(messageId)) selectedMessageIds.delete(messageId);
+  else selectedMessageIds.add(messageId);
+  const el = document.querySelector(`[data-message-id="${CSS.escape(messageId)}"]`);
+  if (el) el.classList.toggle("selected", selectedMessageIds.has(messageId));
+  updateSelectionToolbar();
+};
+
+window.deleteSelectedMessages = async function() {
+  if (!currentChatId || selectedMessageIds.size === 0) return;
+  if (!confirm(`Delete ${selectedMessageIds.size} selected message(s)?`)) return;
+  try {
+    await deleteMessages(currentChatId, [...selectedMessageIds]);
+    selectedMessageIds.clear();
+    selectionMode = false;
+    updateSelectionToolbar();
+    showToast("Selected message(s) deleted ✅");
+  } catch (err) {
+    console.error("Delete messages error:", err);
+    showToast("Could not delete messages. Deploy updated Firestore rules.");
+  }
+};
+
+window.toggleChatSearch = function() {
+  const panel = $("chat-search-panel");
+  if (!panel) return;
+  const willOpen = !panel.classList.contains("show");
+  panel.classList.toggle("show", willOpen);
+  closeFloatingPanels();
+  if (willOpen) {
+    $("chat-search-input")?.focus();
+  } else {
+    chatSearchQuery = "";
+    if ($("chat-search-input")) $("chat-search-input").value = "";
+    renderMessages();
+  }
+};
+
+window.filterCurrentChatMessages = function() {
+  chatSearchQuery = $("chat-search-input")?.value || "";
+  renderMessages();
+};
+
+window.clearChatSearch = function() {
+  chatSearchQuery = "";
+  if ($("chat-search-input")) $("chat-search-input").value = "";
+  $("chat-search-panel")?.classList.remove("show");
+  renderMessages();
+};
+
+window.toggleChatMenu = function(e) {
+  e?.stopPropagation?.();
+  const menu = $("chat-menu");
+  if (!menu || !currentChatId) return;
+  menu.classList.toggle("show");
+};
+
+window.deleteCurrentChat = async function() {
+  closeFloatingPanels();
+  if (!currentChatId) return;
+  if (!confirm("Delete this whole chat for both users?")) return;
+  try {
+    const oldChatId = currentChatId;
+    resetActiveChatUI();
+    await deleteWholeChat(oldChatId);
+    showToast("Chat deleted ✅");
+  } catch (err) {
+    console.error("Delete whole chat error:", err);
+    showToast("Could not delete chat. Deploy updated Firestore rules.");
+  }
+};
+
+window.blockCurrentContact = async function() {
+  closeFloatingPanels();
+  if (!currentContactId || !currentUser) return;
+  const name = $("chat-h-name")?.textContent || "this contact";
+  if (!confirm(`Block ${name}? You will not be able to send messages or call them from this chat.`)) return;
+  try {
+    await blockContact(currentUser.uid, currentContactId);
+    contactBlocked = true;
+    updateComposerState();
+    showToast("Contact blocked.");
+  } catch (err) {
+    console.error("Block contact error:", err);
+    showToast("Could not block contact. Deploy updated Firestore rules.");
+  }
+};
+
+// Close menu on outside click
+document.addEventListener("click", e => {
+  if (!e.target.closest?.("#chat-menu") && !e.target.closest?.("#chat-menu-btn")) {
+    $("chat-menu")?.classList.remove("show");
+  }
+});
+
 function buildAttachment(msg) {
   if (!msg.fileUrl) return "";
   const href = safeLink(msg.fileUrl);
@@ -578,19 +792,27 @@ function buildBubble(msg) {
   const wrap  = document.createElement("div");
   const text  = String(msg.text || "");
   const attachment = buildAttachment(msg);
-  wrap.className = "msg-wrap " + (isOut ? "out" : "in");
+  const selected = selectedMessageIds.has(msg.id);
+  wrap.className = "msg-wrap " + (isOut ? "out" : "in") + (selectionMode ? " selection-mode" : "") + (selected ? " selected" : "");
+  wrap.dataset.messageId = msg.id || "";
   wrap.innerHTML = `
+    ${selectionMode ? `<button class="msg-select-dot" type="button" title="Select message"><i class="fa-solid fa-check"></i></button>` : ""}
     <div class="bubble${attachment ? " has-attachment" : ""}">
       ${isOut
         ? '<div class="bubble-tail-out"></div>'
         : '<div class="bubble-tail-in"></div>'}
       ${attachment}
-      ${text ? `<div class="bubble-text">${esc(text)}</div>` : ""}
+      ${text ? `<div class="bubble-text">${highlightEsc(text, chatSearchQuery)}</div>` : ""}
       <div class="bubble-meta">
         <span class="b-time">${fmtTime(msg.timestamp)}</span>
         ${isOut ? '<span class="b-ticks"><i class="fa-solid fa-check-double"></i></span>' : ""}
       </div>
     </div>`;
+  wrap.addEventListener("click", e => {
+    if (!selectionMode) return;
+    if (e.target.closest("a") || e.target.closest(".msg-download-btn")) return;
+    window.toggleMessageSelection(msg.id);
+  });
   wrap.querySelectorAll(".msg-download-btn").forEach(btn => {
     btn.addEventListener("click", e => {
       e.preventDefault();
@@ -629,6 +851,7 @@ window.downloadAttachment = async function(url, name = "nexchat-file") {
 window.sendMessage = async function() {
   const inp  = $("message-input");
   const text = inp.value.trim();
+  if (contactBlocked) { showToast("You blocked this contact. Messages are disabled."); return; }
   if (!text || !currentChatId) return;
   inp.value = "";
   autoGrow(inp);
@@ -645,6 +868,7 @@ window.sendMessage = async function() {
   }
 };
 window.chooseFile = function() {
+  if (contactBlocked) { showToast("You blocked this contact. File sharing is disabled."); return; }
   if (!currentChatId) {
     showToast("Open a chat before sending files.");
     return;
@@ -704,6 +928,7 @@ function stopCameraStream() {
   if (video) video.srcObject = null;
 }
 window.openCameraCapture = async function() {
+  if (contactBlocked) { showToast("You blocked this contact. Camera sending is disabled."); return; }
   if (!currentChatId) {
     showToast("Open a chat before sending a camera photo.");
     return;
@@ -834,6 +1059,8 @@ window.toggleNewConv = function() {
 };
 
 window.closeMobileChat = function() {
+  closeFloatingPanels();
+  $("chat-search-panel")?.classList.remove("show");
   $("chat-area").classList.remove("mobile-active");
 };
 
@@ -993,6 +1220,7 @@ function listenForRemoteIce(callId, role) {
   }));
 }
 window.startCall = async function(type = "audio") {
+  if (contactBlocked) { showToast("You blocked this contact. Calls are disabled."); return; }
   if (!currentChatId || !currentContactId) {
     showToast("Open a chat before starting a call.");
     return;

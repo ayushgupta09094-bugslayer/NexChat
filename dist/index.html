@@ -112,7 +112,7 @@
           </div>
           <div class="profile-content">
             <div class="profile-avatar-wrap">
-              <div class="profile-av-big" id="profile-av-big">N</div>
+              <div class="profile-av-big clickable-profile" id="profile-av-big" onclick="chooseProfilePhoto()" title="Change profile picture">N</div>
               <div class="profile-display-name" id="profile-disp-name">Username</div>
               <div class="profile-display-email" id="profile-disp-email">email@example.com</div>
               <div class="premium-badge">
@@ -218,10 +218,33 @@
               <div class="chat-h-name" id="chat-h-name">Contact</div>
               <div class="chat-h-status" id="chat-h-status">online</div>
             </div>
-            <button class="icon-btn"><i class="fa-solid fa-magnifying-glass"></i></button>
+            <button class="icon-btn mobile-visible" onclick="toggleChatSearch()" title="Search messages"><i class="fa-solid fa-magnifying-glass"></i></button>
             <button class="icon-btn call-btn" onclick="startCall('audio')" title="Audio call"><i class="fa-solid fa-phone"></i></button>
             <button class="icon-btn call-btn" onclick="startCall('video')" title="Video call"><i class="fa-solid fa-video"></i></button>
-            <button class="icon-btn" onclick="viewCurrentProfile()" title="View profile"><i class="fa-solid fa-ellipsis-vertical"></i></button>
+            <button class="icon-btn mobile-visible" id="chat-menu-btn" onclick="toggleChatMenu(event)" title="Chat options"><i class="fa-solid fa-ellipsis-vertical"></i></button>
+          </div>
+          <!-- Chat Search Panel -->
+          <div class="chat-search-panel" id="chat-search-panel">
+            <div class="search-wrap">
+              <i class="fa-solid fa-magnifying-glass"></i>
+              <input type="text" id="chat-search-input" placeholder="Search messages in this chat…" oninput="filterCurrentChatMessages()"/>
+              <button class="inline-clear-btn" type="button" onclick="clearChatSearch()" title="Close search"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+          </div>
+          <!-- Message Selection Bar -->
+          <div class="message-select-bar" id="message-select-bar">
+            <span id="selected-count">0 selected</span>
+            <div class="select-actions">
+              <button type="button" id="delete-selected-btn" onclick="deleteSelectedMessages()"><i class="fa-solid fa-trash"></i> Delete</button>
+              <button type="button" onclick="toggleSelectMode(false)">Cancel</button>
+            </div>
+          </div>
+          <!-- Chat Menu -->
+          <div class="chat-menu" id="chat-menu">
+            <button type="button" onclick="viewCurrentProfile(); toggleChatMenu(event)"><i class="fa-solid fa-user"></i> View profile</button>
+            <button type="button" onclick="toggleSelectMode(true)"><i class="fa-solid fa-check-square"></i> Select messages</button>
+            <button type="button" onclick="deleteCurrentChat()"><i class="fa-solid fa-trash-can"></i> Delete whole chat</button>
+            <button type="button" class="danger" onclick="blockCurrentContact()"><i class="fa-solid fa-ban"></i> Block contact</button>
           </div>
           <!-- Messages -->
           <div class="messages-area" id="messages-area">
@@ -231,7 +254,6 @@
           </div>
           <!-- Message Input -->
           <div class="chat-input-area">
-            <button class="input-icon-btn"><i class="fa-regular fa-face-smile"></i></button>
             <div class="msg-input-wrap">
               <textarea
                 id="message-input"

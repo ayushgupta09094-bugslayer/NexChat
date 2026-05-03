@@ -21,6 +21,7 @@ import {
   onSnapshot,
   serverTimestamp,
   updateDoc,
+  deleteDoc,
   where,
   limit
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
@@ -386,22 +387,49 @@ export async function searchUsersByQuery(searchValue, currentUid) {
   const qText = normalizeSearchValue(searchValue);
   if (!qText || qText.length < 2) return [];
 
-  const snap = await getDocs(query(collection(db, COLLECTIONS.USERS), limit(80)));
-  const users = normalizeUsersFromSnap(snap, currentUid);
-  return users
-    .filter(user => {
+  const byId = new Map();
+  const addUsers = users => {
+    users.forEach(u => {
+      const id = u.uid || u.id;
+      if (id && id !== currentUid) byId.set(id, { ...u, id, uid: id });
+    });
+  };
+
+  // Fast path for users created/updated with searchTokens.
+  try {
+    const tokenSnap = await getDocs(
+      query(collection(db, COLLECTIONS.USERS), where("searchTokens", "array-contains", qText), limit(20))
+    );
+    addUsers(normalizeUsersFromSnap(tokenSnap, currentUid));
+  } catch (err) {
+    console.warn("Token user search fallback:", err);
+  }
+
+  // Reliable fallback for small student/demo projects: read users and match any part
+  // of name, email, NexChat ID, or UID. UI still hides users until a search is typed.
+  try {
+    const snap = await getDocs(collection(db, COLLECTIONS.USERS));
+    const users = normalizeUsersFromSnap(snap, currentUid).filter(user => {
       const fields = [
         user.name,
         user.displayName,
         user.email,
+        String(user.email || "").split("@")[0],
         user.uid,
         user.id,
         user.nexId,
         makeNexId(user.uid || user.id || "")
       ].map(v => normalizeSearchValue(v));
-      return fields.some(v => v && v.includes(qText));
-    })
-    .slice(0, 12);
+      return fields.some(v => v && (v.includes(qText) || qText.includes(v)));
+    });
+    addUsers(users);
+  } catch (err) {
+    console.error("Fallback user search error:", err);
+  }
+
+  return Array.from(byId.values())
+    .sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")))
+    .slice(0, 20);
 }
 
 // ════════════════════════════════════════════════════════════
@@ -592,6 +620,52 @@ export async function sendFileMsg(chatId, senderId, senderName, file) {
     lastMessage:     msgType === "image" ? "📷 Photo" : `📎 ${shortLastMessage(cleanName)}`,
     lastMessageTime: serverTimestamp()
   });
+}
+
+// ════════════════════════════════════════════════════════════
+//  MESSAGE / CHAT ACTIONS — delete messages, delete chat, block
+// ════════════════════════════════════════════════════════════
+export function stopMessagesListener() {
+  if (unsubMessages) { unsubMessages(); unsubMessages = null; }
+}
+
+export async function deleteMessages(chatId, messageIds = []) {
+  if (!chatId || !Array.isArray(messageIds) || !messageIds.length) return;
+  const uniqueIds = [...new Set(messageIds)].filter(Boolean);
+  await Promise.all(uniqueIds.map(id => deleteDoc(doc(db, COLLECTIONS.CHATS, chatId, COLLECTIONS.MESSAGES, id))));
+  await updateDoc(doc(db, COLLECTIONS.CHATS, chatId), {
+    lastMessage: "Message deleted",
+    lastMessageTime: serverTimestamp()
+  });
+}
+
+export async function deleteWholeChat(chatId) {
+  if (!chatId) return;
+  const msgSnap = await getDocs(collection(db, COLLECTIONS.CHATS, chatId, COLLECTIONS.MESSAGES));
+  await Promise.all(msgSnap.docs.map(d => deleteDoc(d.ref)));
+  await deleteDoc(doc(db, COLLECTIONS.CHATS, chatId));
+}
+
+function blockDocId(blockerId, blockedId) {
+  return `${blockerId}_${blockedId}`;
+}
+
+export async function blockContact(blockerId, blockedId) {
+  if (!blockerId || !blockedId || blockerId === blockedId) throw new Error("Invalid contact to block.");
+  await setDoc(doc(db, "blocks", blockDocId(blockerId, blockedId)), {
+    blockerId,
+    blockedId,
+    createdAt: serverTimestamp()
+  }, { merge: true });
+}
+
+export async function isContactBlocked(myUid, contactUid) {
+  if (!myUid || !contactUid) return { iBlocked: false, theyBlocked: false, blocked: false };
+  const [mine, theirs] = await Promise.all([
+    getDoc(doc(db, "blocks", blockDocId(myUid, contactUid))),
+    getDoc(doc(db, "blocks", blockDocId(contactUid, myUid)))
+  ]);
+  return { iBlocked: mine.exists(), theyBlocked: theirs.exists(), blocked: mine.exists() || theirs.exists() };
 }
 
 // ════════════════════════════════════════════════════════════

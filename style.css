@@ -894,3 +894,143 @@ html, body {
   #camera-video { flex: 1; max-height: none; height: 100%; }
   .user-profile-card { width: calc(100vw - 28px); }
 }
+
+/* ── Added: chat search, message selection, chat menu, PC profile fixes ── */
+#active-chat { position: relative; }
+.chat-header-info { min-width: 0; }
+.chat-h-name,
+.chat-h-status { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.chat-search-panel {
+  display: none;
+  padding: 10px 14px;
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.chat-search-panel.show { display: block; }
+.inline-clear-btn {
+  width: 30px; height: 30px; border-radius: 9px;
+  border: none; background: transparent; color: var(--text-sec);
+  cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+}
+.inline-clear-btn:hover { background: var(--bg-hover); color: var(--gold-2); }
+.search-result-note {
+  align-self: center;
+  display: inline-flex; align-items: center; gap: 8px;
+  margin: 6px auto 10px;
+  padding: 7px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text-sec);
+  font-size: 12px;
+}
+.search-result-note strong { color: var(--gold-2); }
+.msg-highlight {
+  background: rgba(255, 215, 0, 0.28);
+  color: var(--text-primary);
+  border-radius: 4px;
+  padding: 0 2px;
+}
+
+.chat-menu {
+  position: absolute;
+  top: 58px;
+  right: 16px;
+  width: 220px;
+  display: none;
+  flex-direction: column;
+  padding: 8px;
+  z-index: 90;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-md);
+  border-radius: 16px;
+  box-shadow: 0 18px 55px rgba(0,0,0,0.55), 0 0 20px rgba(255,215,0,0.08);
+}
+.chat-menu.show { display: flex; }
+.chat-menu button {
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 10px;
+  border-radius: 11px;
+  font-family: inherit;
+  font-size: 13px;
+  text-align: left;
+}
+.chat-menu button:hover { background: var(--bg-hover); color: var(--gold-2); }
+.chat-menu button.danger { color: #f87171; }
+.chat-menu button.danger:hover { background: rgba(239,68,68,0.12); }
+
+.message-select-bar {
+  display: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 14px;
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border);
+  color: var(--gold-2);
+  font-size: 13px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.message-select-bar.show { display: flex; }
+.select-actions { display: flex; gap: 8px; }
+.select-actions button {
+  border: 1px solid var(--border);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  border-radius: 10px;
+  padding: 8px 10px;
+  cursor: pointer;
+  font-family: inherit;
+  font-weight: 700;
+  font-size: 12px;
+}
+.select-actions button:hover { border-color: var(--gold-4); color: var(--gold-2); }
+.select-actions button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.msg-wrap.selection-mode { cursor: pointer; gap: 8px; align-items: center; }
+.msg-wrap.selection-mode.out { flex-direction: row-reverse; }
+.msg-select-dot {
+  width: 24px; height: 24px; border-radius: 50%;
+  border: 1.5px solid var(--border-md);
+  background: var(--bg-input);
+  color: transparent;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+.msg-wrap.selected .msg-select-dot {
+  background: linear-gradient(135deg, var(--gold-3), var(--gold-1));
+  color: #0A0800;
+  border-color: var(--gold-2);
+}
+.msg-wrap.selected .bubble {
+  box-shadow: 0 0 0 2px rgba(255,215,0,0.3), 0 2px 8px rgba(0,0,0,0.25);
+}
+.input-icon-btn.disabled,
+.send-btn.disabled,
+#message-input:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.profile-av-big.clickable-profile { cursor: pointer; }
+.profile-av-big.clickable-profile:hover { transform: translateY(-1px); filter: brightness(1.08); }
+
+@media (max-width: 720px) {
+  .chat-header { gap: 6px; padding: 9px 8px; }
+  .chat-header .icon-btn { width: 34px; height: 34px; flex-shrink: 0; }
+  .chat-header .icon-btn.mobile-visible { display: flex !important; }
+  .chat-header .icon-btn.call-btn { display: flex !important; }
+  .chat-header-info { flex: 1; min-width: 54px; }
+  .chat-menu { top: 54px; right: 8px; width: min(220px, calc(100vw - 18px)); }
+  .message-select-bar { padding: 8px 10px; }
+  .select-actions button { padding: 7px 8px; }
+  .chat-search-panel { padding: 8px 10px; }
+}
