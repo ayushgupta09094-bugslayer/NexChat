@@ -1,28 +1,26 @@
-# ⚡ NexChat — Premium Dark Gold Messaging App
+# NexChat
 
-Real-time 1:1 chat using Firebase Authentication and Cloud Firestore.
+Premium real-time chat app using Firebase Authentication, Cloud Firestore, Firebase Hosting, and Cloudinary uploads.
 
-## Run locally
+## Start locally
 
 ```bash
 npm install
 npm run dev
 ```
 
-## Build deployment files
+## Build
 
 ```bash
 npm run build
 ```
 
-The build command creates the `dist` folder.
-
 ## Deploy
 
 ```bash
-firebase login
-firebase use nexchat-db758
 firebase deploy --only hosting,firestore
 ```
 
-Read `DEPLOYMENT.md` for the full guide.
+## Cloudinary
+
+Before sending photos/files, update `config/config.js` with your Cloudinary `cloudName` and unsigned `uploadPreset`.

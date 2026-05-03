@@ -20,20 +20,52 @@ service cloud.firestore {
       return /databases/$(database)/documents/chats/$(chatId);
     }
 
+    function callPath(callId) {
+      return /databases/$(database)/documents/calls/$(callId);
+    }
+
     function isChatMember(chatId) {
       return isSignedIn()
         && exists(chatPath(chatId))
         && request.auth.uid in get(chatPath(chatId)).data.members;
     }
 
-    match /users/{userId} {
-      // Needed for the New Conversation page.
-      allow read: if isSignedIn();
+    function isCallMember(callId) {
+      return isSignedIn()
+        && exists(callPath(callId))
+        && (request.auth.uid == get(callPath(callId)).data.callerId
+          || request.auth.uid == get(callPath(callId)).data.calleeId);
+    }
 
-      // A user document must use the same ID as Firebase Auth UID.
+    function validTextMessage() {
+      return request.resource.data.type == 'text'
+        && request.resource.data.text is string
+        && request.resource.data.text.size() > 0
+        && request.resource.data.text.size() <= 5000;
+    }
+
+    function validAttachmentMessage() {
+      return request.resource.data.type in ['image', 'file']
+        && request.resource.data.fileName is string
+        && request.resource.data.fileName.size() > 0
+        && request.resource.data.fileName.size() <= 180
+        && request.resource.data.fileUrl is string
+        && request.resource.data.fileUrl.size() > 0
+        && request.resource.data.fileType is string
+        && request.resource.data.fileSize is number
+        && request.resource.data.fileSize > 0
+        && request.resource.data.fileSize <= 10485760
+        && request.resource.data.storagePath is string;
+    }
+
+    match /users/{userId} {
+      // Users are found by exact NexChat ID/full UID. Listing all users is blocked.
+      allow get: if isSignedIn();
+      allow list: if false;
+
       allow create: if isOwner(userId)
         && request.resource.data.uid == request.auth.uid
-        && request.resource.data.keys().hasOnly(['uid','name','email','online','lastSeen','createdAt'])
+        && request.resource.data.keys().hasOnly(['uid','name','email','nexId','nexIdLower','online','lastSeen','lastActive','createdAt'])
         && request.resource.data.keys().hasAll(['uid','name','email','online'])
         && request.resource.data.name is string
         && request.resource.data.name.size() >= 1
@@ -43,18 +75,30 @@ service cloud.firestore {
       allow update: if isOwner(userId)
         && request.resource.data.uid == resource.data.uid
         && request.resource.data.email == resource.data.email
-        && request.resource.data.keys().hasOnly(['uid','name','email','online','lastSeen','createdAt']);
+        && request.resource.data.keys().hasOnly(['uid','name','email','nexId','nexIdLower','online','lastSeen','lastActive','createdAt']);
 
       allow delete: if isOwner(userId);
     }
 
+    match /userLookup/{lookupId} {
+      // Exact document get only, used for NexChat ID search.
+      allow get: if isSignedIn();
+      allow list: if false;
+
+      allow create, update: if isSignedIn()
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.keys().hasOnly(['uid','nexId','name','email','updatedAt'])
+        && request.resource.data.nexId is string
+        && request.resource.data.name is string
+        && request.resource.data.email is string;
+
+      allow delete: if false;
+    }
+
     match /chats/{chatId} {
-      // Existing chat docs can only be opened by their members.
-      // Missing chat docs can be checked before creation by any signed-in user.
       allow get: if isSignedIn()
         && (!exists(chatPath(chatId)) || request.auth.uid in resource.data.members);
 
-      // Required for the current user's conversation list query.
       allow list: if isSignedIn();
 
       allow create: if isSignedIn()
@@ -78,12 +122,39 @@ service cloud.firestore {
 
         allow create: if isChatMember(chatId)
           && request.resource.data.senderId == request.auth.uid
-          && request.resource.data.text is string
-          && request.resource.data.text.size() > 0
-          && request.resource.data.text.size() <= 5000
-          && request.resource.data.keys().hasOnly(['text','senderId','senderName','timestamp'])
-          && request.resource.data.keys().hasAll(['text','senderId','senderName','timestamp']);
+          && request.resource.data.senderName is string
+          && request.resource.data.type in ['text', 'image', 'file']
+          && request.resource.data.keys().hasOnly(['type','text','senderId','senderName','timestamp','fileName','fileUrl','fileType','fileSize','storagePath'])
+          && request.resource.data.keys().hasAll(['type','senderId','senderName','timestamp'])
+          && (validTextMessage() || validAttachmentMessage());
 
+        allow update, delete: if false;
+      }
+    }
+
+    match /calls/{callId} {
+      allow get, list: if isSignedIn();
+
+      allow create: if isSignedIn()
+        && request.resource.data.callerId == request.auth.uid
+        && request.resource.data.calleeId is string
+        && request.resource.data.type in ['audio', 'video']
+        && request.resource.data.status == 'ringing'
+        && request.resource.data.keys().hasOnly(['chatId','callerId','callerName','calleeId','calleeName','type','offer','answer','status','createdAt','updatedAt']);
+
+      allow update: if isCallMember(callId)
+        && request.resource.data.callerId == resource.data.callerId
+        && request.resource.data.calleeId == resource.data.calleeId
+        && request.resource.data.chatId == resource.data.chatId
+        && request.resource.data.type == resource.data.type
+        && request.resource.data.status in ['ringing','active','ended','rejected','missed']
+        && request.resource.data.keys().hasOnly(['chatId','callerId','callerName','calleeId','calleeName','type','offer','answer','status','createdAt','updatedAt']);
+
+      allow delete: if false;
+
+      match /{candidateCollection}/{candidateId} {
+        allow read, create: if isCallMember(callId)
+          && candidateCollection in ['callerCandidates','calleeCandidates'];
         allow update, delete: if false;
       }
     }

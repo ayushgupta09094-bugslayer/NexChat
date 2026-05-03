@@ -1,36 +1,57 @@
-# NexChat Firebase Deployment Guide
+# NexChat Firebase + Cloudinary Deployment
 
-## 1. Run locally
+This ZIP keeps the previous NexChat UI and features, but file/photo uploads now use Cloudinary instead of Firebase Storage.
 
-Open terminal in the main `NexChat` folder:
+## 1. Install dependencies
 
 ```bash
 npm install
+```
+
+## 2. Run locally
+
+```bash
 npm run dev
 ```
 
-Then open the localhost URL shown by Vite.
+Open the local URL shown by Vite.
 
-## 2. Enable Firebase services
+## 3. Firebase Console checklist
 
-In Firebase Console for project `nexchat-db758`:
+Enable these in your Firebase project:
 
-1. Go to **Authentication → Sign-in method**.
-2. Enable **Email/Password**.
-3. Go to **Firestore Database** and create the database.
-4. Start in production mode. The included `firestore.rules` file will be deployed from this project.
+1. Authentication → Sign-in method → Email/Password
+2. Firestore Database → Create database
 
-Do not manually create users in Firestore. Sign up from the app. Each `/users/{uid}` document must use the same ID as the Firebase Auth UID.
+You do not need Firebase Storage for this version.
 
-## 3. Create the deployment folder
+## 4. Cloudinary setup for files/photos
+
+1. Open Cloudinary Dashboard.
+2. Copy your Cloud name.
+3. Go to Settings → Upload → Upload presets.
+4. Create an unsigned upload preset.
+5. Paste both values inside `config/config.js`:
+
+```js
+export const CLOUDINARY_CONFIG = Object.freeze({
+  cloudName: "your_cloud_name",
+  uploadPreset: "your_unsigned_upload_preset",
+  folder: "nexchat_uploads"
+});
+```
+
+Important: do not put your Cloudinary API secret in frontend code.
+
+## 5. Build
 
 ```bash
 npm run build
 ```
 
-This creates the `dist` folder. Firebase Hosting is configured to deploy only this folder.
+This creates the `dist` folder used by Firebase Hosting.
 
-## 4. Deploy
+## 6. Deploy Firebase Hosting + Firestore
 
 ```bash
 firebase login
@@ -38,25 +59,26 @@ firebase use nexchat-db758
 firebase deploy --only hosting,firestore
 ```
 
-Or use the shortcut:
+Do not use `firebase deploy --only hosting,firestore,storage` in this Cloudinary version.
 
-```bash
-npm run deploy
-```
+## What is included
 
-## 5. Test chat correctly
+- Real online/offline status using a Firestore heartbeat (`lastActive`).
+- Users automatically become offline after they stop sending heartbeats.
+- Local photo/file upload from your system using Cloudinary.
+- Image preview inside chat bubbles.
+- Download buttons for photos and documents inside chat bubbles.
+- Search users by NexChat ID instead of showing all users.
+- Audio calling and video calling using WebRTC + Firestore signaling.
+- Mobile responsive chat layout improvements.
 
-To test 1-to-1 chat, create two real accounts from the app:
+Maximum file upload size: 10 MB.
 
-- Account 1 in Chrome
-- Account 2 in another browser, Incognito, or another device
 
-After both accounts exist, open **New Conversation** and click the other user.
+## Calling notes
 
-If clicking a user does nothing, redeploy rules:
+Audio/video calling works on Firebase Hosting because it uses HTTPS. The browser will ask for microphone/camera permission. For best testing, open one account in normal Chrome and another account in Incognito or a different browser/device.
 
-```bash
-firebase deploy --only firestore
-```
+## User search notes
 
-Then refresh the app.
+Open My Profile and copy your NexChat ID. Share that ID with another user. They can paste it in New Conversation to find you.

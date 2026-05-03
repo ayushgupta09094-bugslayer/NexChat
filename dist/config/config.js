@@ -17,5 +17,19 @@ export const firebaseConfig = {
 export const COLLECTIONS = Object.freeze({
   USERS: "users",
   CHATS: "chats",
-  MESSAGES: "messages"
+  MESSAGES: "messages",
+  CALLS: "calls"
 });
+
+// ============================================================
+//  Cloudinary Configuration
+//  Used only for photo/file uploads.
+//  Create an unsigned upload preset in Cloudinary and paste it here.
+// ============================================================
+
+export const CLOUDINARY_CONFIG = Object.freeze({
+  cloudName: "dayaa7rwp",
+  uploadPreset: "NexChat_upload",
+  folder: "nexchat_uploads"
+});
+

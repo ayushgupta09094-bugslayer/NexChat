@@ -6,8 +6,17 @@ import {
   getOrCreateChat,
   startMessagesListener,
   sendMsg,
+  sendFileMsg,
   watchContactStatus,
-  loadAllUsersData,
+  findUserByPublicId,
+  startIncomingCallsListener,
+  stopIncomingCallsListener,
+  createCall,
+  answerCall,
+  updateCallStatus,
+  addIceCandidateToCall,
+  listenCallDoc,
+  listenIceCandidates,
   friendlyErr
 } from "./firebase.js";
 // ════════════════════════════════════════════════════════════
@@ -18,6 +27,24 @@ let currentChatId    = null;
 let currentContactId = null;
 let allChats         = [];
 let allUsers         = [];
+let userSearchTimer  = null;
+let incomingCallData = null;
+let activeCallId     = null;
+let activeCallType   = null;
+let peerConnection   = null;
+let localStream      = null;
+let remoteStream     = null;
+let callUnsubs       = [];
+let pendingIce       = [];
+let currentCallRole  = null;
+let isMuted          = false;
+let isCameraOff      = false;
+const RTC_CONFIG = {
+  iceServers: [
+    { urls: "stun:stun.l.google.com:19302" },
+    { urls: "stun:stun1.l.google.com:19302" }
+  ]
+};
 // ════════════════════════════════════════════════════════════
 //  DOM HELPER
 // ════════════════════════════════════════════════════════════
@@ -83,6 +110,44 @@ function fmtLastSeen(ts) {
   const d = ts.toDate ? ts.toDate() : new Date(ts);
   return d.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
+function userIsOnline(user = {}) {
+  if (!user.lastActive) return false;
+  const d = user.lastActive.toDate ? user.lastActive.toDate() : new Date(user.lastActive);
+  return !!user.online && (Date.now() - d.getTime()) < 90000;
+}
+function formatFileSize(bytes = 0) {
+  if (!bytes) return "";
+  const units = ["B", "KB", "MB", "GB"];
+  let size = Number(bytes);
+  let unit = 0;
+  while (size >= 1024 && unit < units.length - 1) { size /= 1024; unit++; }
+  return `${size.toFixed(size >= 10 || unit === 0 ? 0 : 1)} ${units[unit]}`;
+}
+function safeLink(url = "") {
+  const u = String(url || "");
+  return /^https:\/\//i.test(u) ? esc(u) : "#";
+}
+function publicUserId(user = {}) {
+  const uid = String(user.uid || user.id || "");
+  return String(user.nexId || (uid ? `NEX-${uid.slice(0, 10).toUpperCase()}` : "NEX-USER"));
+}
+function matchUserSearch(user, q) {
+  const needle = String(q || "").trim().toLowerCase();
+  if (!needle) return false;
+  const fields = [
+    user.name, user.displayName, user.email, user.uid, user.id, user.nexId, publicUserId(user)
+  ].map(v => String(v || "").toLowerCase());
+  return fields.some(v => v && (v.includes(needle) || needle.includes(v)));
+}
+function triggerLocalDownload(url, name) {
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name || "nexchat-file";
+  a.rel = "noopener noreferrer";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
 // ════════════════════════════════════════════════════════════
 //  TOAST
 // ════════════════════════════════════════════════════════════
@@ -110,12 +175,11 @@ export function onAuthReady(user, isLoggedIn) {
     $("auth-screen").style.display = "none";
     $("app-screen").style.display  = "block";
     initAppUI();
-    // Register users callback
-    window.__onUsersLoaded = users => {
-      allUsers = users;
-      renderUsersList(allUsers);
-    };
+    startIncomingCallsListener(user.uid, handleIncomingCall);
+    renderUserSearchHint();
   } else {
+    stopIncomingCallsListener();
+    cleanupCall(false);
     currentUser   = null;
     currentChatId = null;
     $("auth-screen").style.display = "flex";
@@ -133,6 +197,7 @@ function initAppUI() {
   $("profile-av-big").style.cssText = av;
   $("profile-disp-name").textContent  = name;
   $("profile-disp-email").textContent = currentUser.email;
+  if ($("profile-user-id")) $("profile-user-id").textContent = publicUserId({ uid: currentUser.uid });
   if (currentUser.metadata?.creationTime) {
     const d = new Date(currentUser.metadata.creationTime);
     $("profile-since").textContent = d.toLocaleDateString([], {
@@ -197,16 +262,30 @@ window.switchTab = function(tab) {
 // ════════════════════════════════════════════════════════════
 //  USERS — Render & Filter
 // ════════════════════════════════════════════════════════════
-function renderUsersList(users) {
+function renderUserSearchHint(message) {
   const list = $("users-list");
   if (!list) return;
+  list.innerHTML = `
+    <div class="no-chats-msg user-search-hint">
+      <i class="fa-solid fa-id-card"></i>
+      <p>${esc(message || "Search by NexChat ID, email, or name to find a user.")}<br/>Users are hidden until you search.</p>
+    </div>`;
+}
+function renderUsersList(users, hasQuery = false) {
+  const list = $("users-list");
+  if (!list) return;
+
+  if (!hasQuery) {
+    renderUserSearchHint();
+    return;
+  }
 
   const safeUsers = (users || [])
     .filter(u => u && u.id && u.id !== currentUser?.uid && u.uid !== currentUser?.uid)
     .filter(u => String(u.email || "").toLowerCase() !== String(currentUser?.email || "").toLowerCase());
 
   if (!safeUsers.length) {
-    list.innerHTML = `<div class="no-chats-msg"><i class="fa-solid fa-users"></i><p>No other users found.<br/>Create another account in a different browser to test chat.</p></div>`;
+    list.innerHTML = `<div class="no-chats-msg"><i class="fa-solid fa-user-slash"></i><p>No user found.<br/>Ask the person for their NexChat ID or registered email.</p></div>`;
     return;
   }
 
@@ -215,6 +294,7 @@ function renderUsersList(users) {
   safeUsers.forEach(u => {
     const name  = String(u.name || u.displayName || "NexUser");
     const email = String(u.email || "");
+    const nexId = publicUserId(u);
 
     const item = document.createElement("button");
     item.type = "button";
@@ -223,13 +303,14 @@ function renderUsersList(users) {
     item.innerHTML = `
       <div class="c-avatar" style="${avatarStyle(u.id)};width:44px;height:44px;border-radius:13px;font-size:16px">
         ${esc(initials(name))}
-        <div class="status-dot${u.online ? "" : " offline"}"></div>
+        <div class="status-dot${userIsOnline(u) ? "" : " offline"}"></div>
       </div>
       <div class="user-item-text">
         <div class="user-item-name">${esc(name)}</div>
         <div class="user-item-email">${esc(email)}</div>
+        <div class="user-item-id">ID: ${esc(nexId)}</div>
       </div>
-      ${u.online ? '<div class="user-online-tag">● ONLINE</div>' : ""}
+      ${userIsOnline(u) ? '<div class="user-online-tag">● ONLINE</div>' : ""}
     `;
     item.addEventListener("click", () => startChat(u.id, name));
     list.appendChild(item);
@@ -237,13 +318,39 @@ function renderUsersList(users) {
 }
 
 window.filterUsers = function() {
-  const q = $("user-search-inp").value.toLowerCase();
-  renderUsersList(
-    q ? allUsers.filter(u =>
-      String(u.name || "").toLowerCase().includes(q) ||
-      String(u.email || "").toLowerCase().includes(q)
-    ) : allUsers
-  );
+  const q = $("user-search-inp").value.trim();
+  if (userSearchTimer) clearTimeout(userSearchTimer);
+
+  if (!q) {
+    renderUserSearchHint();
+    return;
+  }
+  if (q.length < 6) {
+    renderUserSearchHint("Enter the person’s NexChat ID to find them.");
+    return;
+  }
+
+  const list = $("users-list");
+  if (list) list.innerHTML = '<div class="spinner"></div>';
+
+  userSearchTimer = setTimeout(async () => {
+    try {
+      const user = await findUserByPublicId(q, currentUser?.uid);
+      renderUsersList(user ? [user] : [], true);
+    } catch (err) {
+      console.error("User search error:", err);
+      renderUsersList([], true);
+    }
+  }, 250);
+};
+window.copyMyId = async function() {
+  const id = publicUserId({ uid: currentUser?.uid });
+  try {
+    await navigator.clipboard.writeText(id);
+    showToast("NexChat ID copied ✅");
+  } catch {
+    showToast(`Your NexChat ID: ${id}`, 5000);
+  }
 };
 // ════════════════════════════════════════════════════════════
 //  CHATS — Callback from firebase.js
@@ -329,11 +436,11 @@ async function openChat(contactUid, contactName) {
   // Update header
   $("chat-h-name").textContent = displayName;
   const statusEl = $("chat-h-status");
-  if (cData.online) {
+  if (userIsOnline(cData)) {
     statusEl.textContent = "online";
     statusEl.className   = "chat-h-status online";
   } else {
-    statusEl.textContent = "last seen " + fmtLastSeen(cData.lastSeen);
+    statusEl.textContent = "last seen " + fmtLastSeen(cData.lastSeen || cData.lastActive);
     statusEl.className   = "chat-h-status";
   }
   const hav = $("chat-h-av");
@@ -345,8 +452,9 @@ async function openChat(contactUid, contactName) {
   // Watch contact's live status
   watchContactStatus(contactUid, data => {
     if (currentContactId !== contactUid) return;
-    statusEl.textContent = data.online ? "online" : "last seen " + fmtLastSeen(data.lastSeen);
-    statusEl.className   = "chat-h-status" + (data.online ? " online" : "");
+    const live = userIsOnline(data);
+    statusEl.textContent = live ? "online" : "last seen " + fmtLastSeen(data.lastSeen || data.lastActive);
+    statusEl.className   = "chat-h-status" + (live ? " online" : "");
   });
   // Highlight in sidebar
   document.querySelectorAll(".chat-item").forEach(el => el.classList.remove("active"));
@@ -384,23 +492,91 @@ export function onMessagesUpdate(msgs) {
   if (tb) area.appendChild(tb);
   area.scrollTop = area.scrollHeight;
 }
+function buildAttachment(msg) {
+  if (!msg.fileUrl) return "";
+  const href = safeLink(msg.fileUrl);
+  const name = esc(msg.fileName || "Attachment");
+  const size = esc(formatFileSize(msg.fileSize));
+  const type = String(msg.fileType || "");
+  const downloadBtn = `
+    <button class="msg-download-btn" type="button" data-download-url="${href}" data-download-name="${name}" title="Download">
+      <i class="fa-solid fa-download"></i> Download
+    </button>`;
+
+  if (msg.type === "image" || type.startsWith("image/")) {
+    return `
+      <a class="msg-image-link" href="${href}" target="_blank" rel="noopener noreferrer" title="Open image">
+        <img class="msg-image" src="${href}" alt="${name}" loading="lazy"/>
+      </a>
+      <div class="msg-file-name">${name}${size ? ` · ${size}` : ""}</div>
+      <div class="msg-media-actions">${downloadBtn}</div>`;
+  }
+
+  return `
+    <a class="msg-file-card" href="${href}" target="_blank" rel="noopener noreferrer" title="Open file">
+      <i class="fa-solid fa-file-lines"></i>
+      <span class="msg-file-meta">
+        <strong>${name}</strong>
+        ${size ? `<small>${size}</small>` : ""}
+      </span>
+    </a>
+    <div class="msg-media-actions">${downloadBtn}</div>`;
+}
 function buildBubble(msg) {
   const isOut = msg.senderId === currentUser.uid;
   const wrap  = document.createElement("div");
+  const text  = String(msg.text || "");
+  const attachment = buildAttachment(msg);
   wrap.className = "msg-wrap " + (isOut ? "out" : "in");
   wrap.innerHTML = `
-    <div class="bubble">
+    <div class="bubble${attachment ? " has-attachment" : ""}">
       ${isOut
         ? '<div class="bubble-tail-out"></div>'
         : '<div class="bubble-tail-in"></div>'}
-      <div class="bubble-text">${esc(msg.text)}</div>
+      ${attachment}
+      ${text ? `<div class="bubble-text">${esc(text)}</div>` : ""}
       <div class="bubble-meta">
         <span class="b-time">${fmtTime(msg.timestamp)}</span>
         ${isOut ? '<span class="b-ticks"><i class="fa-solid fa-check-double"></i></span>' : ""}
       </div>
     </div>`;
+  wrap.querySelectorAll(".msg-download-btn").forEach(btn => {
+    btn.addEventListener("click", e => {
+      e.preventDefault();
+      e.stopPropagation();
+      downloadAttachment(btn.dataset.downloadUrl, btn.dataset.downloadName);
+    });
+  });
   return wrap;
 }
+window.downloadAttachment = async function(url, name = "nexchat-file") {
+  const cleanUrl = String(url || "");
+  const cleanName = String(name || "nexchat-file").replace(/[\\/:*?"<>|]+/g, "_");
+  if (!/^https:\/\//i.test(cleanUrl)) {
+    showToast("Invalid download link.");
+    return;
+  }
+  showToast("Starting download…");
+  try {
+    const res = await fetch(cleanUrl, { mode: "cors" });
+    if (!res.ok) throw new Error("Download failed");
+    const blob = await res.blob();
+    const blobUrl = URL.createObjectURL(blob);
+    triggerLocalDownload(blobUrl, cleanName);
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 15000);
+  } catch (err) {
+    console.warn("Direct download failed; opening file link instead:", err);
+    const a = document.createElement("a");
+    a.href = cleanUrl;
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    showToast("File opened. Use browser save/download if needed.", 4500);
+  }
+};
+
 // ════════════════════════════════════════════════════════════
 //  SEND MESSAGE
 // ════════════════════════════════════════════════════════════
@@ -420,6 +596,44 @@ window.sendMessage = async function() {
   } catch (e) {
     console.error("Send message error:", e);
     showToast("Failed to send. Check Firestore rules or connection.");
+  }
+};
+window.chooseFile = function() {
+  if (!currentChatId) {
+    showToast("Open a chat before sending files.");
+    return;
+  }
+  $("file-input")?.click();
+};
+window.handleFileSelect = async function(e) {
+  const file = e.target.files?.[0];
+  e.target.value = "";
+  if (!file || !currentChatId) return;
+
+  if (file.size > 10 * 1024 * 1024) {
+    showToast("File is too large. Maximum size is 10 MB.");
+    return;
+  }
+
+  const btn = $("attach-btn");
+  btn?.classList.add("uploading");
+  btn?.setAttribute("disabled", "true");
+  showToast(file.type.startsWith("image/") ? "Uploading photo…" : "Uploading file…");
+
+  try {
+    await sendFileMsg(
+      currentChatId,
+      currentUser.uid,
+      currentUser.displayName || "NexUser",
+      file
+    );
+    showToast(file.type.startsWith("image/") ? "Photo sent ✅" : "File sent ✅");
+  } catch (err) {
+    console.error("File upload error:", err);
+    showToast(err.message || friendlyErr(err.code));
+  } finally {
+    btn?.classList.remove("uploading");
+    btn?.removeAttribute("disabled");
   }
 };
 window.onMsgKey = function(e) {
@@ -442,10 +656,255 @@ window.toggleNewConv = function() {
   const panel = $("new-conv-panel");
   panel.classList.toggle("open");
   if (panel.classList.contains("open")) {
-    loadAllUsersData(currentUser?.uid);
     $("user-search-inp").value = "";
+    renderUserSearchHint();
   }
 };
+
 window.closeMobileChat = function() {
   $("chat-area").classList.remove("mobile-active");
+};
+
+// ════════════════════════════════════════════════════════════
+//  AUDIO / VIDEO CALLING — WebRTC + Firestore signaling
+// ════════════════════════════════════════════════════════════
+function showIncomingCall(call) {
+  incomingCallData = call;
+  const modal = $("incoming-call");
+  if (!modal) return;
+  $("incoming-call-name").textContent = call.callerName || "NexChat User";
+  $("incoming-call-type").textContent = call.type === "video" ? "Incoming video call" : "Incoming audio call";
+  modal.classList.add("show");
+}
+function hideIncomingCall() {
+  const modal = $("incoming-call");
+  if (modal) modal.classList.remove("show");
+  incomingCallData = null;
+}
+function handleIncomingCall(call) {
+  if (!currentUser || !call || call.calleeId !== currentUser.uid) return;
+  if (activeCallId && activeCallId !== call.id) {
+    updateCallStatus(call.id, "rejected");
+    return;
+  }
+  showIncomingCall(call);
+}
+function setCallStatus(text) {
+  const el = $("call-status");
+  if (el) el.textContent = text;
+}
+function showCallModal(type, name, statusText) {
+  const modal = $("call-modal");
+  if (!modal) return;
+  activeCallType = type;
+  modal.classList.add("show");
+  modal.classList.toggle("video-mode", type === "video");
+  modal.classList.toggle("audio-mode", type !== "video");
+  $("call-contact-name").textContent = name || "NexChat User";
+  setCallStatus(statusText || "Connecting…");
+  $("camera-btn")?.classList.toggle("hidden", type !== "video");
+}
+async function getCallMedia(type) {
+  return navigator.mediaDevices.getUserMedia({
+    audio: true,
+    video: type === "video" ? { facingMode: "user" } : false
+  });
+}
+function resetCallButtons() {
+  isMuted = false;
+  isCameraOff = false;
+  const muteBtn = $("mute-btn");
+  const cameraBtn = $("camera-btn");
+  if (muteBtn) {
+    muteBtn.classList.remove("off");
+    muteBtn.innerHTML = '<i class="fa-solid fa-microphone"></i>';
+  }
+  if (cameraBtn) {
+    cameraBtn.classList.remove("off");
+    cameraBtn.innerHTML = '<i class="fa-solid fa-video"></i>';
+  }
+}
+function createPeerConnection(role) {
+  currentCallRole = role;
+  pendingIce = [];
+  remoteStream = new MediaStream();
+  const remoteVideo = $("remote-video");
+  if (remoteVideo) remoteVideo.srcObject = remoteStream;
+
+  peerConnection = new RTCPeerConnection(RTC_CONFIG);
+  peerConnection.ontrack = event => {
+    event.streams[0]?.getTracks().forEach(track => remoteStream.addTrack(track));
+    setCallStatus("Connected");
+  };
+  peerConnection.onicecandidate = event => {
+    if (!event.candidate) return;
+    const candidate = event.candidate.toJSON();
+    if (activeCallId) {
+      addIceCandidateToCall(activeCallId, role, candidate).catch(console.error);
+    } else {
+      pendingIce.push(candidate);
+    }
+  };
+  peerConnection.onconnectionstatechange = () => {
+    const state = peerConnection?.connectionState;
+    if (state === "connected") setCallStatus("Connected");
+    if (["failed", "disconnected", "closed"].includes(state)) setCallStatus("Call ended");
+  };
+}
+async function flushPendingIce() {
+  const toSend = pendingIce.splice(0);
+  await Promise.all(toSend.map(c => addIceCandidateToCall(activeCallId, currentCallRole, c).catch(console.error)));
+}
+function addCallUnsub(unsub) {
+  if (typeof unsub === "function") callUnsubs.push(unsub);
+}
+function cleanupCall(updateRemote = false) {
+  if (updateRemote && activeCallId) updateCallStatus(activeCallId, "ended").catch(console.error);
+  callUnsubs.forEach(unsub => { try { unsub(); } catch {} });
+  callUnsubs = [];
+  if (peerConnection) {
+    try { peerConnection.close(); } catch {}
+    peerConnection = null;
+  }
+  if (localStream) {
+    localStream.getTracks().forEach(track => track.stop());
+    localStream = null;
+  }
+  if (remoteStream) {
+    remoteStream.getTracks().forEach(track => track.stop());
+    remoteStream = null;
+  }
+  const localVideo = $("local-video");
+  const remoteVideo = $("remote-video");
+  if (localVideo) localVideo.srcObject = null;
+  if (remoteVideo) remoteVideo.srcObject = null;
+  $("call-modal")?.classList.remove("show");
+  activeCallId = null;
+  activeCallType = null;
+  currentCallRole = null;
+  pendingIce = [];
+  resetCallButtons();
+}
+function listenForCallEnd(callId) {
+  addCallUnsub(listenCallDoc(callId, async call => {
+    if (!call) return;
+    if (["ended", "rejected", "missed"].includes(call.status)) {
+      const msg = call.status === "rejected" ? "Call rejected" : "Call ended";
+      showToast(msg);
+      cleanupCall(false);
+      hideIncomingCall();
+    }
+  }));
+}
+function listenForRemoteAnswer(callId) {
+  addCallUnsub(listenCallDoc(callId, async call => {
+    if (!call) return;
+    if (call.status === "rejected") {
+      showToast("Call rejected");
+      cleanupCall(false);
+      return;
+    }
+    if (call.answer && peerConnection && !peerConnection.currentRemoteDescription) {
+      await peerConnection.setRemoteDescription(new RTCSessionDescription(call.answer));
+      setCallStatus("Connected");
+    }
+    if (call.status === "ended") cleanupCall(false);
+  }));
+}
+function listenForRemoteIce(callId, role) {
+  addCallUnsub(listenIceCandidates(callId, role, async candidate => {
+    try {
+      if (peerConnection && candidate) await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+    } catch (err) {
+      console.warn("Could not add ICE candidate:", err);
+    }
+  }));
+}
+window.startCall = async function(type = "audio") {
+  if (!currentChatId || !currentContactId) {
+    showToast("Open a chat before starting a call.");
+    return;
+  }
+  if (activeCallId) {
+    showToast("You are already in a call.");
+    return;
+  }
+  try {
+    const contact = await getUserData(currentContactId) || {};
+    const contactName = contact.name || $("chat-h-name")?.textContent || "NexChat User";
+    showCallModal(type, contactName, type === "video" ? "Starting video call…" : "Starting audio call…");
+    localStream = await getCallMedia(type);
+    const localVideo = $("local-video");
+    if (localVideo) localVideo.srcObject = localStream;
+    createPeerConnection("caller");
+    localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+    const offer = await peerConnection.createOffer();
+    await peerConnection.setLocalDescription(offer);
+    activeCallId = await createCall({
+      chatId: currentChatId,
+      callerId: currentUser.uid,
+      callerName: currentUser.displayName || "NexUser",
+      calleeId: currentContactId,
+      calleeName: contactName,
+      type,
+      offer: { type: offer.type, sdp: offer.sdp }
+    });
+    await flushPendingIce();
+    setCallStatus("Ringing…");
+    listenForRemoteAnswer(activeCallId);
+    listenForRemoteIce(activeCallId, "caller");
+  } catch (err) {
+    console.error("Start call error:", err);
+    cleanupCall(false);
+    showToast(err?.name === "NotAllowedError" ? "Microphone/camera permission denied." : "Could not start call.");
+  }
+};
+window.acceptIncomingCall = async function() {
+  const call = incomingCallData;
+  if (!call || activeCallId) return;
+  hideIncomingCall();
+  try {
+    activeCallId = call.id;
+    showCallModal(call.type, call.callerName, "Connecting…");
+    localStream = await getCallMedia(call.type);
+    const localVideo = $("local-video");
+    if (localVideo) localVideo.srcObject = localStream;
+    createPeerConnection("callee");
+    localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+    await peerConnection.setRemoteDescription(new RTCSessionDescription(call.offer));
+    const answer = await peerConnection.createAnswer();
+    await peerConnection.setLocalDescription(answer);
+    await answerCall(activeCallId, { type: answer.type, sdp: answer.sdp });
+    await flushPendingIce();
+    listenForCallEnd(activeCallId);
+    listenForRemoteIce(activeCallId, "callee");
+  } catch (err) {
+    console.error("Accept call error:", err);
+    updateCallStatus(activeCallId, "ended").catch(console.error);
+    cleanupCall(false);
+    showToast(err?.name === "NotAllowedError" ? "Microphone/camera permission denied." : "Could not answer call.");
+  }
+};
+window.declineIncomingCall = async function() {
+  if (incomingCallData?.id) await updateCallStatus(incomingCallData.id, "rejected");
+  hideIncomingCall();
+};
+window.endCurrentCall = function() {
+  cleanupCall(true);
+};
+window.toggleMute = function() {
+  if (!localStream) return;
+  isMuted = !isMuted;
+  localStream.getAudioTracks().forEach(track => { track.enabled = !isMuted; });
+  const btn = $("mute-btn");
+  btn?.classList.toggle("off", isMuted);
+  if (btn) btn.innerHTML = isMuted ? '<i class="fa-solid fa-microphone-slash"></i>' : '<i class="fa-solid fa-microphone"></i>';
+};
+window.toggleCamera = function() {
+  if (!localStream) return;
+  isCameraOff = !isCameraOff;
+  localStream.getVideoTracks().forEach(track => { track.enabled = !isCameraOff; });
+  const btn = $("camera-btn");
+  btn?.classList.toggle("off", isCameraOff);
+  if (btn) btn.innerHTML = isCameraOff ? '<i class="fa-solid fa-video-slash"></i>' : '<i class="fa-solid fa-video"></i>';
 };

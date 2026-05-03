@@ -120,6 +120,13 @@
               <div class="profile-info-label">Member Since</div>
               <div class="profile-info-val" id="profile-since">—</div>
             </div>
+            <div class="profile-info-card profile-id-card">
+              <div class="profile-info-label">NexChat ID</div>
+              <div class="profile-info-val profile-id-row">
+                <span id="profile-user-id">—</span>
+                <button type="button" onclick="copyMyId()" title="Copy ID"><i class="fa-regular fa-copy"></i></button>
+              </div>
+            </div>
             <button class="logout-btn" onclick="handleLogout()">
               <i class="fa-solid fa-right-from-bracket"></i> Sign Out
             </button>
@@ -134,7 +141,7 @@
           <div class="panel-search">
             <div class="search-wrap">
               <i class="fa-solid fa-magnifying-glass"></i>
-              <input type="text" id="user-search-inp" placeholder="Search by name or email…" oninput="filterUsers()"/>
+              <input type="text" id="user-search-inp" placeholder="Search by NexChat ID…" oninput="filterUsers()"/>
             </div>
           </div>
           <div class="users-list" id="users-list">
@@ -201,7 +208,8 @@
               <div class="chat-h-status" id="chat-h-status">online</div>
             </div>
             <button class="icon-btn"><i class="fa-solid fa-magnifying-glass"></i></button>
-            <button class="icon-btn"><i class="fa-solid fa-phone"></i></button>
+            <button class="icon-btn call-btn" onclick="startCall('audio')" title="Audio call"><i class="fa-solid fa-phone"></i></button>
+            <button class="icon-btn call-btn" onclick="startCall('video')" title="Video call"><i class="fa-solid fa-video"></i></button>
             <button class="icon-btn"><i class="fa-solid fa-ellipsis-vertical"></i></button>
           </div>
           <!-- Messages -->
@@ -222,7 +230,16 @@
                 oninput="autoGrow(this)"
               ></textarea>
             </div>
-            <button class="input-icon-btn"><i class="fa-solid fa-paperclip"></i></button>
+            <input
+              type="file"
+              id="file-input"
+              accept="image/*,.pdf,.doc,.docx,.txt,.zip,.rar,.ppt,.pptx,.xls,.xlsx"
+              hidden
+              onchange="handleFileSelect(event)"
+            />
+            <button class="input-icon-btn" id="attach-btn" onclick="chooseFile()" title="Send photo or file">
+              <i class="fa-solid fa-paperclip"></i>
+            </button>
             <button class="send-btn" id="send-btn" onclick="sendMessage()">
               <i class="fa-solid fa-paper-plane"></i>
             </button>
@@ -231,6 +248,41 @@
       </div><!-- /chat-area -->
     </div>
   </div>
+  <!-- Incoming Call Notification -->
+  <div class="incoming-call" id="incoming-call">
+    <div class="incoming-call-card">
+      <div class="incoming-icon"><i class="fa-solid fa-phone-volume"></i></div>
+      <div class="incoming-info">
+        <div id="incoming-call-name">NexChat User</div>
+        <span id="incoming-call-type">Incoming call</span>
+      </div>
+      <button class="call-action accept" onclick="acceptIncomingCall()" title="Accept"><i class="fa-solid fa-phone"></i></button>
+      <button class="call-action decline" onclick="declineIncomingCall()" title="Decline"><i class="fa-solid fa-phone-slash"></i></button>
+    </div>
+  </div>
+
+  <!-- Call Modal -->
+  <div class="call-modal" id="call-modal">
+    <div class="call-box">
+      <div class="call-top">
+        <div>
+          <div class="call-title" id="call-contact-name">NexChat User</div>
+          <div class="call-status" id="call-status">Connecting…</div>
+        </div>
+      </div>
+      <div class="call-media">
+        <video id="remote-video" autoplay playsinline></video>
+        <div class="audio-avatar"><i class="fa-solid fa-user"></i></div>
+        <video id="local-video" autoplay muted playsinline></video>
+      </div>
+      <div class="call-controls">
+        <button class="call-control" id="mute-btn" onclick="toggleMute()" title="Mute"><i class="fa-solid fa-microphone"></i></button>
+        <button class="call-control" id="camera-btn" onclick="toggleCamera()" title="Camera"><i class="fa-solid fa-video"></i></button>
+        <button class="call-control end" onclick="endCurrentCall()" title="End call"><i class="fa-solid fa-phone-slash"></i></button>
+      </div>
+    </div>
+  </div>
+
   <!-- Toast Notification -->
   <div id="toast"></div>
   <!-- ═══════ SCRIPTS ═══════ -->
