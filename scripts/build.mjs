@@ -9,7 +9,8 @@ const filesToCopy = [
   "index.html",
   "style.css",
   "app.js",
-  "firebase.js"
+  "firebase.js",
+  "nexchat-icon.svg"
 ];
 
 await rm(dist, { recursive: true, force: true });

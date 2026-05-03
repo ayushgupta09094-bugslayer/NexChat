@@ -26,9 +26,7 @@ import {
   stopMessagesListener,
   friendlyErr
 } from "./firebase.js";
-// ════════════════════════════════════════════════════════════
-//  STATE
-// ════════════════════════════════════════════════════════════
+
 let currentUser      = null;
 let currentChatId    = null;
 let currentContactId = null;
@@ -53,19 +51,19 @@ let selectionMode    = false;
 let selectedMessageIds = new Set();
 let currentContactData = null;
 let contactBlocked   = false;
+let chatsSeenOnce    = false;
+let lastChatNotifyMap = new Map();
+let ringTimer        = null;
+let ringAudioCtx     = null;
 const RTC_CONFIG = {
   iceServers: [
     { urls: "stun:stun.l.google.com:19302" },
     { urls: "stun:stun1.l.google.com:19302" }
   ]
 };
-// ════════════════════════════════════════════════════════════
-//  DOM HELPER
-// ════════════════════════════════════════════════════════════
+
 const $ = id => document.getElementById(id);
-// ════════════════════════════════════════════════════════════
-//  ESCAPE HTML — prevent XSS
-// ════════════════════════════════════════════════════════════
+
 function esc(s) {
   return String(s ?? "")
     .replace(/&/g, "&amp;")
@@ -73,9 +71,7 @@ function esc(s) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
 }
-// ════════════════════════════════════════════════════════════
-//  AVATAR HELPERS
-// ════════════════════════════════════════════════════════════
+
 function initials(name = "") {
   return name.split(" ").map(w => w[0] || "").join("").slice(0, 2).toUpperCase() || "?";
 }
@@ -93,9 +89,7 @@ function avatarStyle(uid) {
   const [c1, c2] = hashColor(uid);
   return `background:linear-gradient(135deg,${c1},${c2})`;
 }
-// ════════════════════════════════════════════════════════════
-//  TIME / DATE FORMATTERS
-// ════════════════════════════════════════════════════════════
+
 function fmtTime(ts) {
   if (!ts) return "";
   const d = ts.toDate ? ts.toDate() : new Date(ts);
@@ -244,15 +238,57 @@ function resetActiveChatUI() {
   updateComposerState();
   document.querySelectorAll(".chat-item").forEach(el => el.classList.remove("active"));
 }
-// ════════════════════════════════════════════════════════════
-//  TOAST
-// ════════════════════════════════════════════════════════════
+
 window.showToast = function(msg, ms = 3000) {
   const t = $("toast");
   t.textContent = msg;
   t.classList.add("show");
   setTimeout(() => t.classList.remove("show"), ms);
 };
+function playNotifyTone(kind = "message") {
+  try {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = "sine";
+    osc.frequency.value = kind === "call" ? 880 : 620;
+    gain.gain.value = 0.035;
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    setTimeout(() => { osc.stop(); ctx.close?.(); }, kind === "call" ? 260 : 160);
+    if (navigator.vibrate) navigator.vibrate(kind === "call" ? [180, 80, 180] : 120);
+  } catch (_) {}
+}
+function startRingTone() {
+  stopRingTone();
+  playNotifyTone("call");
+  ringTimer = setInterval(() => playNotifyTone("call"), 1400);
+}
+function stopRingTone() {
+  if (ringTimer) clearInterval(ringTimer);
+  ringTimer = null;
+  try { ringAudioCtx?.close?.(); } catch (_) {}
+  ringAudioCtx = null;
+}
+function maybeNotifyChat(chat) {
+  if (!currentUser || !chat || !chat.id) return;
+  const ts = chat.lastMessageTime?.toMillis ? chat.lastMessageTime.toMillis() : (chat.lastMessageTime ? new Date(chat.lastMessageTime).getTime() : 0);
+  const prev = lastChatNotifyMap.get(chat.id) || 0;
+  lastChatNotifyMap.set(chat.id, ts || prev);
+  if (!chatsSeenOnce || !ts || ts <= prev) return;
+  if (chat.lastSenderId === currentUser.uid) return;
+  const otherId = chat.members?.find?.(m => m !== currentUser.uid) || "";
+  const otherName = chat.memberNames?.[otherId] || chat.lastSenderName || "NexChat User";
+  const body = chat.lastMessage || "New message";
+  if (currentChatId !== chat.id || document.hidden) {
+    showToast(`New message from ${otherName}`);
+    playNotifyTone("message");
+  }
+}
+
 function showErr(elId, msg) {
   const el = $(elId);
   el.textContent = msg;
@@ -261,9 +297,7 @@ function showErr(elId, msg) {
 function clearErr(elId) {
   $(elId).style.display = "none";
 }
-// ════════════════════════════════════════════════════════════
-//  AUTH STATE CALLBACK (called from firebase.js)
-// ════════════════════════════════════════════════════════════
+
 export function onAuthReady(user, isLoggedIn) {
   $("loading-screen").style.display = "none";
   if (isLoggedIn && user) {
@@ -282,9 +316,7 @@ export function onAuthReady(user, isLoggedIn) {
     $("app-screen").style.display  = "none";
   }
 }
-// ════════════════════════════════════════════════════════════
-//  INIT APP UI — populate profile & avatar
-// ════════════════════════════════════════════════════════════
+
 async function initAppUI() {
   const name = currentUser.displayName || "NexUser";
   const photoURL = currentUser.photoURL || "";
@@ -309,9 +341,7 @@ async function initAppUI() {
     console.warn("Could not refresh profile data:", err);
   }
 }
-// ════════════════════════════════════════════════════════════
-//  AUTH HANDLERS
-// ════════════════════════════════════════════════════════════
+
 window.handleLogin = async function(e) {
   e.preventDefault();
   clearErr("login-error");
@@ -365,9 +395,7 @@ window.switchTab = function(tab) {
   clearErr("login-error");
   clearErr("signup-error");
 };
-// ════════════════════════════════════════════════════════════
-//  USERS — Render & Filter
-// ════════════════════════════════════════════════════════════
+
 function renderUserSearchHint(message) {
   const list = $("users-list");
   if (!list) return;
@@ -468,11 +496,11 @@ window.copyMyId = async function() {
     showToast(`Your NexChat ID: ${id}`, 5000);
   }
 };
-// ════════════════════════════════════════════════════════════
-//  CHATS — Callback from firebase.js
-// ════════════════════════════════════════════════════════════
+
 export function onChatsUpdate(chats) {
   allChats = chats;
+  allChats.forEach(maybeNotifyChat);
+  chatsSeenOnce = true;
   renderChatsList(allChats);
 }
 function renderChatsList(chats) {
@@ -516,9 +544,7 @@ window.filterChats = function() {
     return name.includes(q);
   }));
 };
-// ════════════════════════════════════════════════════════════
-//  OPEN / START CHAT
-// ════════════════════════════════════════════════════════════
+
 window.startChat = async function(uid, name) {
   if (!uid || !currentUser) return;
   if (uid === currentUser.uid) {
@@ -546,13 +572,13 @@ async function openChat(contactUid, contactName) {
     contactUid,
     contactName
   );
-  // Fetch contact data
+
   const cData = await getUserData(contactUid) || {};
   currentContactData = cData;
   const blockState = await isContactBlocked(currentUser.uid, contactUid).catch(() => ({ iBlocked: false, theyBlocked: false, blocked: false }));
   contactBlocked = !!blockState.blocked;
   const displayName = cData.name || contactName || "NexUser";
-  // Update header
+
   $("chat-h-name").textContent = displayName;
   const statusEl = $("chat-h-status");
   if (userIsOnline(cData)) {
@@ -564,23 +590,23 @@ async function openChat(contactUid, contactName) {
   }
   const hav = $("chat-h-av");
   applyAvatar(hav, contactUid, displayName, cData.photoURL, ";width:40px;height:40px;border-radius:12px;font-size:15px");
-  // Show active chat view
+
   $("chat-empty").style.display  = "none";
   $("active-chat").style.display = "flex";
-  // Watch contact's live status
+
   watchContactStatus(contactUid, data => {
     if (currentContactId !== contactUid) return;
     const live = userIsOnline(data);
     statusEl.textContent = live ? "online" : "last seen " + fmtLastSeen(data.lastSeen || data.lastActive);
     statusEl.className   = "chat-h-status" + (live ? " online" : "");
   });
-  // Highlight in sidebar
+
   document.querySelectorAll(".chat-item").forEach(el => el.classList.remove("active"));
   const ci = $("ci-" + currentChatId);
   if (ci) ci.classList.add("active");
-  // Mobile: show chat area
+
   if (window.innerWidth <= 720) $("chat-area").classList.add("mobile-active");
-  // Reset chat tools
+
   chatSearchQuery = "";
   selectionMode = false;
   selectedMessageIds.clear();
@@ -588,13 +614,10 @@ async function openChat(contactUid, contactName) {
   if ($("chat-search-input")) $("chat-search-input").value = "";
   updateSelectionToolbar();
   updateComposerState();
-  // Start listening to messages
+
   startMessagesListener(currentChatId);
 }
 
-// ════════════════════════════════════════════════════════════
-//  MESSAGES — Callback from firebase.js
-// ════════════════════════════════════════════════════════════
 export function onMessagesUpdate(msgs) {
   currentMessages = Array.isArray(msgs) ? msgs : [];
   renderMessages();
@@ -636,7 +659,7 @@ function renderMessages() {
       : '<div class="date-sep"><span>Send your first message ⚡</span></div>';
   }
 
-  // Restore typing indicator at bottom
+  
   const tb = $("typing-bubble");
   if (tb) area.appendChild(tb);
   area.scrollTop = area.scrollHeight;
@@ -749,7 +772,7 @@ window.blockCurrentContact = async function() {
   }
 };
 
-// Close menu on outside click
+
 document.addEventListener("click", e => {
   if (!e.target.closest?.("#chat-menu") && !e.target.closest?.("#chat-menu-btn")) {
     $("chat-menu")?.classList.remove("show");
@@ -845,9 +868,6 @@ window.downloadAttachment = async function(url, name = "nexchat-file") {
   }
 };
 
-// ════════════════════════════════════════════════════════════
-//  SEND MESSAGE
-// ════════════════════════════════════════════════════════════
 window.sendMessage = async function() {
   const inp  = $("message-input");
   const text = inp.value.trim();
@@ -916,9 +936,7 @@ window.autoGrow = function(el) {
   el.style.height = "auto";
   el.style.height = Math.min(el.scrollHeight, 120) + "px";
 };
-// ════════════════════════════════════════════════════════════
-//  CAMERA PHOTO CAPTURE
-// ════════════════════════════════════════════════════════════
+
 function stopCameraStream() {
   if (cameraStream) {
     cameraStream.getTracks().forEach(track => track.stop());
@@ -984,9 +1002,6 @@ window.captureCameraPhoto = async function() {
   }, "image/jpeg", 0.9);
 };
 
-// ════════════════════════════════════════════════════════════
-//  PROFILE PHOTOS + USER PROFILE VIEW
-// ════════════════════════════════════════════════════════════
 window.chooseProfilePhoto = function() {
   $("profile-photo-input")?.click();
 };
@@ -1043,9 +1058,6 @@ window.closeUserProfile = function() {
   $("user-profile-modal")?.classList.remove("show");
 };
 
-// ════════════════════════════════════════════════════════════
-//  PANEL TOGGLES
-// ════════════════════════════════════════════════════════════
 window.toggleProfile = function() {
   $("profile-panel").classList.toggle("open");
 };
@@ -1064,20 +1076,21 @@ window.closeMobileChat = function() {
   $("chat-area").classList.remove("mobile-active");
 };
 
-// ════════════════════════════════════════════════════════════
-//  AUDIO / VIDEO CALLING — WebRTC + Firestore signaling
-// ════════════════════════════════════════════════════════════
 function showIncomingCall(call) {
   incomingCallData = call;
   const modal = $("incoming-call");
   if (!modal) return;
   $("incoming-call-name").textContent = call.callerName || "NexChat User";
-  $("incoming-call-type").textContent = call.type === "video" ? "Incoming video call" : "Incoming audio call";
+  const label = call.type === "video" ? "Incoming video call" : "Incoming audio call";
+  $("incoming-call-type").textContent = label;
   modal.classList.add("show");
+  showToast(`${label} from ${call.callerName || "NexChat User"}`, 7000);
+  startRingTone();
 }
 function hideIncomingCall() {
   const modal = $("incoming-call");
   if (modal) modal.classList.remove("show");
+  stopRingTone();
   incomingCallData = null;
 }
 function handleIncomingCall(call) {
@@ -1292,6 +1305,12 @@ window.declineIncomingCall = async function() {
 window.endCurrentCall = function() {
   cleanupCall(true);
 };
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && activeCallId) {
+    cleanupCall(true);
+  }
+});
 window.toggleMute = function() {
   if (!localStream) return;
   isMuted = !isMuted;

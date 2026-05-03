@@ -1,9 +1,3 @@
-// ============================================================
-//  NexChat Firebase Configuration
-//  Firebase Web App config values are public identifiers.
-//  Keep Security Rules strict to protect your Firestore data.
-// ============================================================
-
 export const firebaseConfig = {
   apiKey: "AIzaSyB1lJmDxxpTLuzvctNa8IHIOzeY7m0QVCA",
   authDomain: "nexchat-db758.firebaseapp.com",
@@ -21,15 +15,9 @@ export const COLLECTIONS = Object.freeze({
   CALLS: "calls"
 });
 
-// ============================================================
-//  Cloudinary Configuration
-//  Used only for photo/file uploads.
-//  Create an unsigned upload preset in Cloudinary and paste it here.
-// ============================================================
-
 export const CLOUDINARY_CONFIG = Object.freeze({
-  cloudName: "YOUR_CLOUDINARY_CLOUD_NAME",
-  uploadPreset: "YOUR_UNSIGNED_UPLOAD_PRESET",
+  cloudName: "dayaa7wrp",
+  uploadPreset: "NexChat_upload",
   folder: "nexchat_uploads"
 });
 

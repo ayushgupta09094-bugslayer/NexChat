@@ -1,84 +1,48 @@
 # NexChat Firebase + Cloudinary Deployment
 
-This ZIP keeps the previous NexChat UI and features, but file/photo uploads now use Cloudinary instead of Firebase Storage.
+This build uses:
 
-## 1. Install dependencies
+- Firebase Hosting
+- Firebase Authentication
+- Cloud Firestore
+- Cloudinary for photos/files/profile pictures
+- WebRTC + Firestore signaling for audio/video calls
 
-```bash
-npm install
-```
+Firebase Storage and Cloud Functions are not required in this version.
 
-## 2. Run locally
+## 1. Cloudinary
 
-```bash
-npm run dev
-```
-
-Open the local URL shown by Vite.
-
-## 3. Firebase Console checklist
-
-Enable these in your Firebase project:
-
-1. Authentication → Sign-in method → Email/Password
-2. Firestore Database → Create database
-
-You do not need Firebase Storage for this version.
-
-## 4. Cloudinary setup for files/photos
-
-1. Open Cloudinary Dashboard.
-2. Copy your Cloud name.
-3. Go to Settings → Upload → Upload presets.
-4. Create an unsigned upload preset.
-5. Paste both values inside `config/config.js`:
+Open `config/config.js` and confirm:
 
 ```js
 export const CLOUDINARY_CONFIG = Object.freeze({
-  cloudName: "your_cloud_name",
-  uploadPreset: "your_unsigned_upload_preset",
+  cloudName: "dayaa7wrp",
+  uploadPreset: "NexChat_upload",
   folder: "nexchat_uploads"
 });
 ```
 
-Important: do not put your Cloudinary API secret in frontend code.
+Use an unsigned upload preset. Do not put Cloudinary API secret in frontend code.
 
-## 5. Build
+## 2. Build
 
-```bash
+```powershell
+npm install
 npm run build
 ```
 
-This creates the `dist` folder used by Firebase Hosting.
+## 3. Deploy
 
-## 6. Deploy Firebase Hosting + Firestore
-
-```bash
+```powershell
 firebase login
 firebase use nexchat-db758
 firebase deploy --only hosting,firestore
 ```
 
-Do not use `firebase deploy --only hosting,firestore,storage` in this Cloudinary version.
+Do not deploy functions or storage for this version.
 
-## What is included
+## 4. After deploy
 
-- Real online/offline status using a Firestore heartbeat (`lastActive`).
-- Users automatically become offline after they stop sending heartbeats.
-- Local photo/file upload from your system using Cloudinary.
-- Image preview inside chat bubbles.
-- Download buttons for photos and documents inside chat bubbles.
-- Search users by NexChat ID instead of showing all users.
-- Audio calling and video calling using WebRTC + Firestore signaling.
-- Mobile responsive chat layout improvements.
+Refresh the website with `Ctrl + F5`.
 
-Maximum file upload size: 10 MB.
-
-
-## Calling notes
-
-Audio/video calling works on Firebase Hosting because it uses HTTPS. The browser will ask for microphone/camera permission. For best testing, open one account in normal Chrome and another account in Incognito or a different browser/device.
-
-## User search notes
-
-Open My Profile and copy your NexChat ID. Share that ID with another user. They can paste it in New Conversation to find you.
+Video call end controls are available in three places: the top red call button, the bottom call controls, and the floating red end-call button. Pressing `Esc` on PC also ends the current call.
