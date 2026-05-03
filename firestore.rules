@@ -59,13 +59,13 @@ service cloud.firestore {
     }
 
     match /users/{userId} {
-      // Users are found by exact NexChat ID/full UID. Listing all users is blocked.
-      allow get: if isSignedIn();
-      allow list: if false;
+      // Users stay hidden in the UI until a search is typed.
+      // List access is needed for partial name/email/ID search in this static frontend app.
+      allow get, list: if isSignedIn();
 
       allow create: if isOwner(userId)
         && request.resource.data.uid == request.auth.uid
-        && request.resource.data.keys().hasOnly(['uid','name','email','nexId','nexIdLower','online','lastSeen','lastActive','createdAt'])
+        && request.resource.data.keys().hasOnly(['uid','name','email','nameLower','emailLower','nexId','nexIdLower','photoURL','photoPublicId','searchTokens','online','lastSeen','lastActive','createdAt','updatedAt'])
         && request.resource.data.keys().hasAll(['uid','name','email','online'])
         && request.resource.data.name is string
         && request.resource.data.name.size() >= 1
@@ -75,7 +75,7 @@ service cloud.firestore {
       allow update: if isOwner(userId)
         && request.resource.data.uid == resource.data.uid
         && request.resource.data.email == resource.data.email
-        && request.resource.data.keys().hasOnly(['uid','name','email','nexId','nexIdLower','online','lastSeen','lastActive','createdAt']);
+        && request.resource.data.keys().hasOnly(['uid','name','email','nameLower','emailLower','nexId','nexIdLower','photoURL','photoPublicId','searchTokens','online','lastSeen','lastActive','createdAt','updatedAt']);
 
       allow delete: if isOwner(userId);
     }
@@ -87,7 +87,7 @@ service cloud.firestore {
 
       allow create, update: if isSignedIn()
         && request.resource.data.uid == request.auth.uid
-        && request.resource.data.keys().hasOnly(['uid','nexId','name','email','updatedAt'])
+        && request.resource.data.keys().hasOnly(['uid','nexId','name','email','photoURL','updatedAt'])
         && request.resource.data.nexId is string
         && request.resource.data.name is string
         && request.resource.data.email is string;

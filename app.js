@@ -9,6 +9,8 @@ import {
   sendFileMsg,
   watchContactStatus,
   findUserByPublicId,
+  searchUsersByQuery,
+  updateUserProfilePhoto,
   startIncomingCallsListener,
   stopIncomingCallsListener,
   createCall,
@@ -39,6 +41,7 @@ let pendingIce       = [];
 let currentCallRole  = null;
 let isMuted          = false;
 let isCameraOff      = false;
+let cameraStream     = null;
 const RTC_CONFIG = {
   iceServers: [
     { urls: "stun:stun.l.google.com:19302" },
@@ -127,6 +130,34 @@ function safeLink(url = "") {
   const u = String(url || "");
   return /^https:\/\//i.test(u) ? esc(u) : "#";
 }
+function rawSafeUrl(url = "") {
+  const u = String(url || "");
+  return /^https:\/\//i.test(u) ? u : "";
+}
+function cloudinaryDownloadUrl(url = "", name = "nexchat-file") {
+  const raw = rawSafeUrl(url);
+  if (!raw) return "";
+  if (!raw.includes("res.cloudinary.com") || !raw.includes("/upload/")) return raw;
+  const baseName = String(name || "nexchat-file")
+    .replace(/\.[^/.]+$/, "")
+    .replace(/[^a-zA-Z0-9_-]+/g, "_")
+    .slice(0, 80) || "nexchat-file";
+  return raw.replace("/upload/", `/upload/fl_attachment:${encodeURIComponent(baseName)}/`);
+}
+function avatarHTML(name = "", photoURL = "") {
+  const src = rawSafeUrl(photoURL);
+  return src ? `<img src="${esc(src)}" alt="${esc(name || "User")}"/>` : esc(initials(name));
+}
+function avatarClass(photoURL = "") {
+  return rawSafeUrl(photoURL) ? " has-photo" : "";
+}
+function applyAvatar(el, uid, name, photoURL, extraCss = "") {
+  if (!el) return;
+  const hasPhoto = !!rawSafeUrl(photoURL);
+  el.classList.toggle("has-photo", hasPhoto);
+  el.style.cssText = (hasPhoto ? "" : avatarStyle(uid)) + extraCss;
+  el.innerHTML = avatarHTML(name, photoURL);
+}
 function publicUserId(user = {}) {
   const uid = String(user.uid || user.id || "");
   return String(user.nexId || (uid ? `NEX-${uid.slice(0, 10).toUpperCase()}` : "NEX-USER"));
@@ -189,12 +220,10 @@ export function onAuthReady(user, isLoggedIn) {
 // ════════════════════════════════════════════════════════════
 //  INIT APP UI — populate profile & avatar
 // ════════════════════════════════════════════════════════════
-function initAppUI() {
+async function initAppUI() {
   const name = currentUser.displayName || "NexUser";
-  const ini  = initials(name);
-  const av   = avatarStyle(currentUser.uid);
-  $("profile-av-big").textContent   = ini;
-  $("profile-av-big").style.cssText = av;
+  const photoURL = currentUser.photoURL || "";
+  applyAvatar($("profile-av-big"), currentUser.uid, name, photoURL);
   $("profile-disp-name").textContent  = name;
   $("profile-disp-email").textContent = currentUser.email;
   if ($("profile-user-id")) $("profile-user-id").textContent = publicUserId({ uid: currentUser.uid });
@@ -203,6 +232,16 @@ function initAppUI() {
     $("profile-since").textContent = d.toLocaleDateString([], {
       month: "long", day: "numeric", year: "numeric"
     });
+  }
+  try {
+    const fresh = await getUserData(currentUser.uid);
+    if (fresh) {
+      applyAvatar($("profile-av-big"), currentUser.uid, fresh.name || name, fresh.photoURL || photoURL);
+      $("profile-disp-name").textContent = fresh.name || name;
+      if ($("profile-user-id")) $("profile-user-id").textContent = publicUserId({ ...fresh, uid: currentUser.uid });
+    }
+  } catch (err) {
+    console.warn("Could not refresh profile data:", err);
   }
 }
 // ════════════════════════════════════════════════════════════
@@ -233,11 +272,13 @@ window.handleSignup = async function(e) {
   const email = $("signup-email").value.trim();
   const pass  = $("signup-password").value;
   const conf  = $("signup-confirm").value;
+  const photo = $("signup-photo")?.files?.[0] || null;
   if (pass !== conf) { showErr("signup-error", "Passwords do not match."); return; }
+  if (photo && !photo.type.startsWith("image/")) { showErr("signup-error", "Profile picture must be an image."); return; }
   btn.disabled   = true;
   btn.textContent = "Creating account…";
   try {
-    await signUp(name, email, pass);
+    await signUp(name, email, pass, photo);
     showToast(`Welcome to NexChat, ${name}! 🎉⚡`);
   } catch (err) {
     showErr("signup-error", friendlyErr(err.code));
@@ -300,9 +341,10 @@ function renderUsersList(users, hasQuery = false) {
     item.type = "button";
     item.className = "user-item";
     item.setAttribute("aria-label", `Start chat with ${name}`);
+    const hasPhoto = !!rawSafeUrl(u.photoURL);
     item.innerHTML = `
-      <div class="c-avatar" style="${avatarStyle(u.id)};width:44px;height:44px;border-radius:13px;font-size:16px">
-        ${esc(initials(name))}
+      <div class="c-avatar${avatarClass(u.photoURL)}" style="${hasPhoto ? "" : avatarStyle(u.id)};width:44px;height:44px;border-radius:13px;font-size:16px">
+        ${avatarHTML(name, u.photoURL)}
         <div class="status-dot${userIsOnline(u) ? "" : " offline"}"></div>
       </div>
       <div class="user-item-text">
@@ -310,9 +352,14 @@ function renderUsersList(users, hasQuery = false) {
         <div class="user-item-email">${esc(email)}</div>
         <div class="user-item-id">ID: ${esc(nexId)}</div>
       </div>
+      <button type="button" class="mini-profile-btn" title="View profile">View</button>
       ${userIsOnline(u) ? '<div class="user-online-tag">● ONLINE</div>' : ""}
     `;
     item.addEventListener("click", () => startChat(u.id, name));
+    item.querySelector(".mini-profile-btn")?.addEventListener("click", e => {
+      e.stopPropagation();
+      showUserProfile(u.id);
+    });
     list.appendChild(item);
   });
 }
@@ -325,8 +372,8 @@ window.filterUsers = function() {
     renderUserSearchHint();
     return;
   }
-  if (q.length < 6) {
-    renderUserSearchHint("Enter the person’s NexChat ID to find them.");
+  if (q.length < 2) {
+    renderUserSearchHint("Type at least 2 characters of their name, email, or NexChat ID.");
     return;
   }
 
@@ -335,8 +382,12 @@ window.filterUsers = function() {
 
   userSearchTimer = setTimeout(async () => {
     try {
-      const user = await findUserByPublicId(q, currentUser?.uid);
-      renderUsersList(user ? [user] : [], true);
+      let users = await searchUsersByQuery(q, currentUser?.uid);
+      if (!users.length) {
+        const exact = await findUserByPublicId(q, currentUser?.uid).catch(() => null);
+        users = exact ? [exact] : [];
+      }
+      renderUsersList(users, true);
     } catch (err) {
       console.error("User search error:", err);
       renderUsersList([], true);
@@ -444,8 +495,7 @@ async function openChat(contactUid, contactName) {
     statusEl.className   = "chat-h-status";
   }
   const hav = $("chat-h-av");
-  hav.textContent   = initials(displayName);
-  hav.style.cssText = avatarStyle(contactUid) + ";width:40px;height:40px;border-radius:12px;font-size:15px";
+  applyAvatar(hav, contactUid, displayName, cData.photoURL, ";width:40px;height:40px;border-radius:12px;font-size:15px");
   // Show active chat view
   $("chat-empty").style.display  = "none";
   $("active-chat").style.display = "flex";
@@ -498,8 +548,9 @@ function buildAttachment(msg) {
   const name = esc(msg.fileName || "Attachment");
   const size = esc(formatFileSize(msg.fileSize));
   const type = String(msg.fileType || "");
+  const downloadUrl = esc(cloudinaryDownloadUrl(msg.fileUrl, msg.fileName || "nexchat-file"));
   const downloadBtn = `
-    <button class="msg-download-btn" type="button" data-download-url="${href}" data-download-name="${name}" title="Download">
+    <button class="msg-download-btn" type="button" data-download-url="${downloadUrl || href}" data-download-name="${name}" title="Download">
       <i class="fa-solid fa-download"></i> Download
     </button>`;
 
@@ -558,12 +609,7 @@ window.downloadAttachment = async function(url, name = "nexchat-file") {
   }
   showToast("Starting download…");
   try {
-    const res = await fetch(cleanUrl, { mode: "cors" });
-    if (!res.ok) throw new Error("Download failed");
-    const blob = await res.blob();
-    const blobUrl = URL.createObjectURL(blob);
-    triggerLocalDownload(blobUrl, cleanName);
-    setTimeout(() => URL.revokeObjectURL(blobUrl), 15000);
+    triggerLocalDownload(cleanUrl, cleanName);
   } catch (err) {
     console.warn("Direct download failed; opening file link instead:", err);
     const a = document.createElement("a");
@@ -646,6 +692,132 @@ window.autoGrow = function(el) {
   el.style.height = "auto";
   el.style.height = Math.min(el.scrollHeight, 120) + "px";
 };
+// ════════════════════════════════════════════════════════════
+//  CAMERA PHOTO CAPTURE
+// ════════════════════════════════════════════════════════════
+function stopCameraStream() {
+  if (cameraStream) {
+    cameraStream.getTracks().forEach(track => track.stop());
+    cameraStream = null;
+  }
+  const video = $("camera-video");
+  if (video) video.srcObject = null;
+}
+window.openCameraCapture = async function() {
+  if (!currentChatId) {
+    showToast("Open a chat before sending a camera photo.");
+    return;
+  }
+  if (!navigator.mediaDevices?.getUserMedia) {
+    showToast("Camera is not available in this browser.");
+    return;
+  }
+  try {
+    cameraStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: "environment" } },
+      audio: false
+    });
+    const video = $("camera-video");
+    if (video) video.srcObject = cameraStream;
+    $("camera-modal")?.classList.add("show");
+  } catch (err) {
+    console.error("Camera open error:", err);
+    showToast(err?.name === "NotAllowedError" ? "Camera permission denied." : "Could not open camera.");
+  }
+};
+window.closeCameraCapture = function() {
+  stopCameraStream();
+  $("camera-modal")?.classList.remove("show");
+};
+window.captureCameraPhoto = async function() {
+  const video = $("camera-video");
+  if (!video || !cameraStream) return;
+  const canvas = document.createElement("canvas");
+  canvas.width = video.videoWidth || 1280;
+  canvas.height = video.videoHeight || 720;
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  canvas.toBlob(async blob => {
+    if (!blob) {
+      showToast("Could not capture photo.");
+      return;
+    }
+    const file = new File([blob], `camera-${Date.now()}.jpg`, { type: "image/jpeg" });
+    window.closeCameraCapture();
+    const btn = $("camera-send-btn");
+    btn?.classList.add("uploading");
+    try {
+      showToast("Uploading camera photo…");
+      await sendFileMsg(currentChatId, currentUser.uid, currentUser.displayName || "NexUser", file);
+      showToast("Camera photo sent ✅");
+    } catch (err) {
+      console.error("Camera photo upload error:", err);
+      showToast(err.message || friendlyErr(err.code));
+    } finally {
+      btn?.classList.remove("uploading");
+    }
+  }, "image/jpeg", 0.9);
+};
+
+// ════════════════════════════════════════════════════════════
+//  PROFILE PHOTOS + USER PROFILE VIEW
+// ════════════════════════════════════════════════════════════
+window.chooseProfilePhoto = function() {
+  $("profile-photo-input")?.click();
+};
+window.handleProfilePhotoSelect = async function(e) {
+  const file = e.target.files?.[0];
+  e.target.value = "";
+  if (!file || !currentUser) return;
+  if (!file.type.startsWith("image/")) {
+    showToast("Profile picture must be an image.");
+    return;
+  }
+  try {
+    showToast("Updating profile picture…");
+    const url = await updateUserProfilePhoto(currentUser.uid, file);
+    applyAvatar($("profile-av-big"), currentUser.uid, currentUser.displayName || "NexUser", url);
+    showToast("Profile picture updated ✅");
+  } catch (err) {
+    console.error("Profile photo error:", err);
+    showToast(err.message || friendlyErr(err.code));
+  }
+};
+window.showUserProfile = async function(uid = currentContactId) {
+  if (!uid) return;
+  try {
+    const user = await getUserData(uid);
+    if (!user) {
+      showToast("Profile not found.");
+      return;
+    }
+    const name = user.name || user.displayName || "NexUser";
+    const modal = $("user-profile-modal");
+    if (!modal) return;
+    applyAvatar($("view-profile-av"), uid, name, user.photoURL, ";width:96px;height:96px;border-radius:28px;font-size:28px");
+    $("view-profile-name").textContent = name;
+    $("view-profile-email").textContent = user.email || "";
+    $("view-profile-id").textContent = publicUserId({ ...user, uid });
+    const live = userIsOnline(user);
+    $("view-profile-status").textContent = live ? "online" : "last seen " + fmtLastSeen(user.lastSeen || user.lastActive);
+    $("view-profile-status").className = "profile-view-status" + (live ? " online" : "");
+    $("view-profile-msg-btn").onclick = () => {
+      closeUserProfile();
+      startChat(uid, name);
+    };
+    modal.classList.add("show");
+  } catch (err) {
+    console.error("View profile error:", err);
+    showToast("Could not load profile.");
+  }
+};
+window.viewCurrentProfile = function() {
+  if (currentContactId) showUserProfile(currentContactId);
+};
+window.closeUserProfile = function() {
+  $("user-profile-modal")?.classList.remove("show");
+};
+
 // ════════════════════════════════════════════════════════════
 //  PANEL TOGGLES
 // ════════════════════════════════════════════════════════════

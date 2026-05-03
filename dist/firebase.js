@@ -21,7 +21,8 @@ import {
   onSnapshot,
   serverTimestamp,
   updateDoc,
-  where
+  where,
+  limit
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import { firebaseConfig, COLLECTIONS, CLOUDINARY_CONFIG } from "./config/config.js";
 import {
@@ -74,13 +75,65 @@ function makeNexId(uid = "") {
 function cleanPublicId(value = "") {
   return String(value || "").trim().toLowerCase();
 }
-async function upsertUserLookup(user, data = {}) {
-  const nexId = makeNexId(user.uid);
-  await setDoc(doc(db, "userLookup", cleanPublicId(nexId)), {
+function normalizeSearchValue(value = "") {
+  return String(value || "").trim().toLowerCase();
+}
+function makeSearchTokens(data = {}) {
+  const values = [
+    data.name,
+    data.email,
+    data.nexId,
+    data.uid,
+    String(data.email || "").split("@")[0],
+    String(data.email || "").split("@")[1],
+    ...String(data.name || "").split(/\s+/)
+  ];
+  const tokens = new Set();
+  const addPrefixes = (value) => {
+    const clean = normalizeSearchValue(value);
+    if (!clean) return;
+    const compact = clean.replace(/\s+/g, " ");
+    for (let i = 2; i <= Math.min(compact.length, 60); i++) tokens.add(compact.slice(0, i));
+    compact.split(/[^a-z0-9@._-]+/i).forEach(part => {
+      if (part.length >= 2) {
+        for (let i = 2; i <= Math.min(part.length, 40); i++) tokens.add(part.slice(0, i));
+      }
+    });
+    // Add useful chunks so searching a middle part of email/ID also works in the app.
+    for (let i = 0; i < compact.length; i++) {
+      for (let len = 3; len <= Math.min(12, compact.length - i); len++) {
+        const chunk = compact.slice(i, i + len);
+        if (/^[a-z0-9@._-]+$/i.test(chunk)) tokens.add(chunk);
+      }
+    }
+  };
+  values.forEach(addPrefixes);
+  return Array.from(tokens).slice(0, 450);
+}
+function publicProfileFields(user, extra = {}) {
+  const nexId = extra.nexId || makeNexId(user.uid);
+  const name = extra.name || user.displayName || "NexUser";
+  const email = extra.email || user.email || "";
+  return {
     uid: user.uid,
+    name,
+    email,
+    nameLower: normalizeSearchValue(name),
+    emailLower: normalizeSearchValue(email),
     nexId,
-    name: data.name || user.displayName || "NexUser",
-    email: data.email || user.email || "",
+    nexIdLower: cleanPublicId(nexId),
+    photoURL: extra.photoURL || user.photoURL || "",
+    photoPublicId: extra.photoPublicId || ""
+  };
+}
+async function upsertUserLookup(user, data = {}) {
+  const profile = publicProfileFields(user, data);
+  await setDoc(doc(db, "userLookup", cleanPublicId(profile.nexId)), {
+    uid: profile.uid,
+    nexId: profile.nexId,
+    name: profile.name,
+    email: profile.email,
+    photoURL: profile.photoURL || "",
     updatedAt: serverTimestamp()
   }, { merge: true });
 }
@@ -89,13 +142,10 @@ async function upsertUserLookup(user, data = {}) {
 async function ensureUserDoc(user) {
   const ref  = doc(db, COLLECTIONS.USERS, user.uid);
   const snap = await getDoc(ref);
-  const nexId = makeNexId(user.uid);
+  const profile = publicProfileFields(user);
   const baseData = {
-    uid:        user.uid,
-    name:       user.displayName || "NexUser",
-    email:      user.email,
-    nexId,
-    nexIdLower: cleanPublicId(nexId),
+    ...profile,
+    searchTokens: makeSearchTokens(profile),
     online:     true,
     lastSeen:   serverTimestamp(),
     lastActive: serverTimestamp()
@@ -103,30 +153,47 @@ async function ensureUserDoc(user) {
   if (!snap.exists()) {
     await setDoc(ref, { ...baseData, createdAt: serverTimestamp() });
   } else {
+    const old = snap.data() || {};
     await updateDoc(ref, {
-      nexId,
-      nexIdLower: cleanPublicId(nexId),
+      name: profile.name,
+      nameLower: profile.nameLower,
+      emailLower: profile.emailLower,
+      nexId: profile.nexId,
+      nexIdLower: profile.nexIdLower,
+      photoURL: old.photoURL || profile.photoURL || "",
+      photoPublicId: old.photoPublicId || profile.photoPublicId || "",
+      searchTokens: makeSearchTokens({ ...profile, photoURL: old.photoURL || profile.photoURL || "" }),
       online:     true,
       lastSeen:   serverTimestamp(),
       lastActive: serverTimestamp()
     });
   }
-  await upsertUserLookup(user, baseData);
+  await upsertUserLookup(user, { ...baseData, photoURL: snap.exists() ? (snap.data().photoURL || profile.photoURL || "") : profile.photoURL });
 }
 
 // ════════════════════════════════════════════════════════════
 //  AUTH — SIGN UP
 // ════════════════════════════════════════════════════════════
-export async function signUp(name, email, password) {
+export async function signUp(name, email, password, profileFile = null) {
   const cred = await createUserWithEmailAndPassword(auth, email, password);
-  await updateProfile(cred.user, { displayName: name });
-  const nexId = makeNexId(cred.user.uid);
+
+  let photoURL = "";
+  let photoPublicId = "";
+  if (profileFile) {
+    const fileType = profileFile.type || "";
+    if (!fileType.startsWith("image/")) throw new Error("Profile picture must be an image.");
+    if (profileFile.size > 5 * 1024 * 1024) throw new Error("Profile picture is too large. Maximum size is 5 MB.");
+    const cleanName = safeFileName(profileFile.name || `profile-${cred.user.uid}.jpg`);
+    const uploaded = await uploadToCloudinary(profileFile, `profiles/${cred.user.uid}`, cleanName, "nexchat,profile-photo");
+    photoURL = uploaded.url;
+    photoPublicId = uploaded.publicId;
+  }
+
+  await updateProfile(cred.user, { displayName: name, ...(photoURL ? { photoURL } : {}) });
+  const profile = publicProfileFields(cred.user, { name, email, photoURL, photoPublicId });
   const userData = {
-    uid:        cred.user.uid,
-    name,
-    email,
-    nexId,
-    nexIdLower: cleanPublicId(nexId),
+    ...profile,
+    searchTokens: makeSearchTokens(profile),
     online:     true,
     lastSeen:   serverTimestamp(),
     lastActive: serverTimestamp(),
@@ -143,6 +210,35 @@ export async function signUp(name, email, password) {
 export async function signIn(email, password) {
   const cred = await signInWithEmailAndPassword(auth, email, password);
   return cred.user;
+}
+
+export async function updateUserProfilePhoto(uid, file) {
+  if (!uid || !file) throw new Error("No profile photo selected.");
+  if (!auth.currentUser || auth.currentUser.uid !== uid) throw new Error("You can only update your own profile photo.");
+  const fileType = file.type || "";
+  if (!fileType.startsWith("image/")) throw new Error("Profile picture must be an image.");
+  if (file.size > 5 * 1024 * 1024) throw new Error("Profile picture is too large. Maximum size is 5 MB.");
+  const cleanName = safeFileName(file.name || `profile-${uid}.jpg`);
+  const uploaded = await uploadToCloudinary(file, `profiles/${uid}`, cleanName, "nexchat,profile-photo");
+  await updateProfile(auth.currentUser, { photoURL: uploaded.url });
+  const userSnap = await getDoc(doc(db, COLLECTIONS.USERS, uid));
+  const old = userSnap.exists() ? userSnap.data() : {};
+  const profile = publicProfileFields(auth.currentUser, {
+    name: old.name || auth.currentUser.displayName || "NexUser",
+    email: old.email || auth.currentUser.email || "",
+    photoURL: uploaded.url,
+    photoPublicId: uploaded.publicId
+  });
+  await setDoc(doc(db, COLLECTIONS.USERS, uid), {
+    ...old,
+    ...profile,
+    searchTokens: makeSearchTokens(profile),
+    photoURL: uploaded.url,
+    photoPublicId: uploaded.publicId,
+    updatedAt: serverTimestamp()
+  }, { merge: true });
+  await upsertUserLookup(auth.currentUser, profile);
+  return uploaded.url;
 }
 
 // ════════════════════════════════════════════════════════════
@@ -286,6 +382,28 @@ export async function findUserByPublicId(searchValue, currentUid) {
   return { id: data.uid || snap.id, docId: snap.id, ...data, uid: data.uid || snap.id };
 }
 
+export async function searchUsersByQuery(searchValue, currentUid) {
+  const qText = normalizeSearchValue(searchValue);
+  if (!qText || qText.length < 2) return [];
+
+  const snap = await getDocs(query(collection(db, COLLECTIONS.USERS), limit(80)));
+  const users = normalizeUsersFromSnap(snap, currentUid);
+  return users
+    .filter(user => {
+      const fields = [
+        user.name,
+        user.displayName,
+        user.email,
+        user.uid,
+        user.id,
+        user.nexId,
+        makeNexId(user.uid || user.id || "")
+      ].map(v => normalizeSearchValue(v));
+      return fields.some(v => v && v.includes(qText));
+    })
+    .slice(0, 12);
+}
+
 // ════════════════════════════════════════════════════════════
 //  USERS — Get single user data
 // ════════════════════════════════════════════════════════════
@@ -414,19 +532,19 @@ function cloudinaryIsConfigured() {
     && !String(CLOUDINARY_CONFIG.uploadPreset).includes("YOUR_");
 }
 
-async function uploadToCloudinary(file, chatId, senderId, cleanName) {
+async function uploadToCloudinary(file, folderPath, cleanName, tags = "nexchat") {
   if (!cloudinaryIsConfigured()) {
     throw new Error("Cloudinary is not configured. Add your cloudName and unsigned uploadPreset in config/config.js.");
   }
 
   const folderRoot = CLOUDINARY_CONFIG.folder || "nexchat_uploads";
-  const folder = `${folderRoot}/${senderId}/${chatId}`;
+  const folder = `${folderRoot}/${folderPath}`.replace(/\/+/g, "/");
   const formData = new FormData();
   formData.append("file", file);
   formData.append("upload_preset", CLOUDINARY_CONFIG.uploadPreset);
   formData.append("folder", folder);
   formData.append("public_id", `${Date.now()}-${cleanName.replace(/\.[^/.]+$/, "")}`);
-  formData.append("tags", "nexchat,chat-upload");
+  formData.append("tags", tags);
 
   const endpoint = `https://api.cloudinary.com/v1_1/${CLOUDINARY_CONFIG.cloudName}/auto/upload`;
   const res = await fetch(endpoint, { method: "POST", body: formData });
@@ -452,7 +570,7 @@ export async function sendFileMsg(chatId, senderId, senderName, file) {
   const fileType = file.type || "application/octet-stream";
   const msgType  = fileType.startsWith("image/") ? "image" : "file";
   const cleanName = safeFileName(file.name || (msgType === "image" ? "photo.jpg" : "file"));
-  const uploaded = await uploadToCloudinary(file, chatId, senderId, cleanName);
+  const uploaded = await uploadToCloudinary(file, `${senderId}/${chatId}`, cleanName, "nexchat,chat-upload");
 
   await addDoc(
     collection(db, COLLECTIONS.CHATS, chatId, COLLECTIONS.MESSAGES),

@@ -28,8 +28,8 @@ export const COLLECTIONS = Object.freeze({
 // ============================================================
 
 export const CLOUDINARY_CONFIG = Object.freeze({
-  cloudName: "dayaa7rwp",
-  uploadPreset: "NexChat_upload",
+  cloudName: "YOUR_CLOUDINARY_CLOUD_NAME",
+  uploadPreset: "YOUR_UNSIGNED_UPLOAD_PRESET",
   folder: "nexchat_uploads"
 });
 

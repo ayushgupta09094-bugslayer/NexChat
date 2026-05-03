@@ -735,3 +735,162 @@ html, body {
   .call-modal { padding: 0; }
   .call-modal.audio-mode .call-media { min-height: 0; }
 }
+
+
+/* ── Added: profile pictures, partial user search, camera capture, profile view ── */
+.c-avatar.has-photo,
+.profile-av-big.has-photo {
+  background: var(--bg-input) !important;
+  overflow: hidden;
+  color: transparent;
+}
+.c-avatar.has-photo img,
+.profile-av-big.has-photo img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+  border-radius: inherit;
+}
+.profile-photo-btn {
+  margin-top: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 9px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--bg-input);
+  color: var(--gold-2);
+  font-size: 12px;
+  font-weight: 700;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all var(--transition);
+}
+.profile-photo-btn:hover { border-color: var(--gold-4); background: rgba(255,215,0,0.08); }
+.optional-label { color: var(--text-muted); font-size: 11px; font-weight: 500; }
+.file-field-wrap input[type="file"] {
+  width: 100%;
+  color: var(--text-sec);
+  font-size: 12px;
+}
+.file-field-wrap input[type="file"]::file-selector-button {
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--gold-2);
+  border-radius: 8px;
+  padding: 6px 10px;
+  margin-right: 10px;
+  font-family: inherit;
+  cursor: pointer;
+}
+.mini-profile-btn {
+  border: 1px solid var(--border);
+  background: rgba(255,215,0,0.06);
+  color: var(--gold-2);
+  border-radius: 9px;
+  padding: 7px 9px;
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.mini-profile-btn:hover { background: rgba(255,215,0,0.12); border-color: var(--gold-4); }
+.clickable-profile { cursor: pointer; }
+.clickable-profile:hover { opacity: 0.88; }
+.user-profile-modal,
+.camera-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 9996;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0,0,0,0.72);
+  backdrop-filter: blur(10px);
+  padding: 18px;
+}
+.user-profile-modal.show,
+.camera-modal.show { display: flex; }
+.user-profile-card {
+  width: min(390px, 94vw);
+  background: var(--bg-card);
+  border: 1px solid var(--border-md);
+  border-radius: 24px;
+  padding: 24px;
+  text-align: center;
+  position: relative;
+  box-shadow: 0 28px 90px rgba(0,0,0,0.65), 0 0 26px rgba(255,215,0,0.08);
+}
+.profile-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 36px;
+  height: 36px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--bg-input);
+  color: var(--text-sec);
+  cursor: pointer;
+}
+.user-profile-card .profile-av-big { margin: 8px auto 14px; }
+.user-profile-card h2 { color: var(--text-primary); font-size: 20px; margin-bottom: 4px; }
+.user-profile-card p { color: var(--text-sec); font-size: 13px; overflow-wrap: anywhere; }
+.profile-view-status { color: var(--text-sec); margin: 10px 0 16px; font-size: 12px; font-weight: 700; }
+.profile-view-status.online { color: #22c55e; }
+.profile-message-btn { margin-top: 12px; }
+.camera-box {
+  width: min(620px, 96vw);
+  background: var(--bg-card);
+  border: 1px solid var(--border-md);
+  border-radius: 24px;
+  overflow: hidden;
+  box-shadow: 0 28px 90px rgba(0,0,0,0.75);
+}
+.camera-hdr {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-deep);
+}
+.camera-hdr h3 { color: var(--text-primary); font-size: 16px; }
+#camera-video {
+  width: 100%;
+  max-height: 68vh;
+  display: block;
+  background: #050505;
+  object-fit: cover;
+}
+.camera-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  padding: 16px;
+  background: var(--bg-deep);
+  border-top: 1px solid var(--border);
+}
+.call-control.capture {
+  width: 56px;
+  height: 56px;
+  background: linear-gradient(135deg, var(--gold-3), var(--gold-1));
+  color: #0A0800;
+  font-size: 20px;
+  box-shadow: 0 0 24px rgba(255,215,0,0.28);
+}
+
+@media (max-width: 720px) {
+  .user-item { gap: 9px; }
+  .mini-profile-btn { padding: 6px 7px; font-size: 10px; }
+  .chat-input-area { gap: 6px; }
+  .input-icon-btn { flex-shrink: 0; }
+  .camera-modal { padding: 0; }
+  .camera-box { width: 100vw; height: 100dvh; border-radius: 0; display: flex; flex-direction: column; }
+  #camera-video { flex: 1; max-height: none; height: 100%; }
+  .user-profile-card { width: calc(100vw - 28px); }
+}

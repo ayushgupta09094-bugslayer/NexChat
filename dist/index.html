@@ -66,6 +66,13 @@
             </div>
           </div>
           <div>
+            <div class="field-label">Profile Picture <span class="optional-label">Optional</span></div>
+            <div class="input-wrap file-field-wrap">
+              <input type="file" id="signup-photo" accept="image/*"/>
+              <i class="fa-solid fa-camera"></i>
+            </div>
+          </div>
+          <div>
             <div class="field-label">Email Address</div>
             <div class="input-wrap">
               <input type="email" id="signup-email" placeholder="you@example.com" required/>
@@ -111,6 +118,10 @@
               <div class="premium-badge">
                 <i class="fa-solid fa-crown"></i> Premium Member
               </div>
+              <input type="file" id="profile-photo-input" accept="image/*" hidden onchange="handleProfilePhotoSelect(event)"/>
+              <button class="profile-photo-btn" type="button" onclick="chooseProfilePhoto()">
+                <i class="fa-solid fa-camera"></i> Change profile picture
+              </button>
             </div>
             <div class="profile-info-card">
               <div class="profile-info-label">About</div>
@@ -141,7 +152,7 @@
           <div class="panel-search">
             <div class="search-wrap">
               <i class="fa-solid fa-magnifying-glass"></i>
-              <input type="text" id="user-search-inp" placeholder="Search by NexChat ID…" oninput="filterUsers()"/>
+              <input type="text" id="user-search-inp" placeholder="Search name, email, or NexChat ID…" oninput="filterUsers()"/>
             </div>
           </div>
           <div class="users-list" id="users-list">
@@ -202,15 +213,15 @@
             <button class="icon-btn back-btn" onclick="closeMobileChat()">
               <i class="fa-solid fa-arrow-left"></i>
             </button>
-            <div class="c-avatar" id="chat-h-av" style="width:40px;height:40px;border-radius:12px;font-size:15px">N</div>
-            <div class="chat-header-info">
+            <div class="c-avatar clickable-profile" id="chat-h-av" onclick="viewCurrentProfile()" title="View profile" style="width:40px;height:40px;border-radius:12px;font-size:15px">N</div>
+            <div class="chat-header-info clickable-profile" onclick="viewCurrentProfile()" title="View profile">
               <div class="chat-h-name" id="chat-h-name">Contact</div>
               <div class="chat-h-status" id="chat-h-status">online</div>
             </div>
             <button class="icon-btn"><i class="fa-solid fa-magnifying-glass"></i></button>
             <button class="icon-btn call-btn" onclick="startCall('audio')" title="Audio call"><i class="fa-solid fa-phone"></i></button>
             <button class="icon-btn call-btn" onclick="startCall('video')" title="Video call"><i class="fa-solid fa-video"></i></button>
-            <button class="icon-btn"><i class="fa-solid fa-ellipsis-vertical"></i></button>
+            <button class="icon-btn" onclick="viewCurrentProfile()" title="View profile"><i class="fa-solid fa-ellipsis-vertical"></i></button>
           </div>
           <!-- Messages -->
           <div class="messages-area" id="messages-area">
@@ -230,6 +241,9 @@
                 oninput="autoGrow(this)"
               ></textarea>
             </div>
+            <button class="input-icon-btn" id="camera-send-btn" onclick="openCameraCapture()" title="Take photo with camera">
+              <i class="fa-solid fa-camera"></i>
+            </button>
             <input
               type="file"
               id="file-input"
@@ -248,6 +262,39 @@
       </div><!-- /chat-area -->
     </div>
   </div>
+  <!-- User Profile View Modal -->
+  <div class="user-profile-modal" id="user-profile-modal">
+    <div class="user-profile-card">
+      <button class="profile-close" onclick="closeUserProfile()" title="Close"><i class="fa-solid fa-xmark"></i></button>
+      <div class="profile-av-big" id="view-profile-av">N</div>
+      <h2 id="view-profile-name">NexUser</h2>
+      <p id="view-profile-email">email@example.com</p>
+      <div class="profile-view-status" id="view-profile-status">online</div>
+      <div class="profile-info-card profile-id-card">
+        <div class="profile-info-label">NexChat ID</div>
+        <div class="profile-info-val" id="view-profile-id">—</div>
+      </div>
+      <button class="auth-btn profile-message-btn" id="view-profile-msg-btn" type="button">
+        <i class="fa-solid fa-message"></i> Message
+      </button>
+    </div>
+  </div>
+
+  <!-- Camera Capture Modal -->
+  <div class="camera-modal" id="camera-modal">
+    <div class="camera-box">
+      <div class="camera-hdr">
+        <h3>Take Photo</h3>
+        <button class="icon-btn" onclick="closeCameraCapture()" title="Close"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <video id="camera-video" autoplay playsinline muted></video>
+      <div class="camera-actions">
+        <button class="call-control" onclick="closeCameraCapture()" title="Cancel"><i class="fa-solid fa-xmark"></i></button>
+        <button class="call-control capture" onclick="captureCameraPhoto()" title="Capture"><i class="fa-solid fa-camera"></i></button>
+      </div>
+    </div>
+  </div>
+
   <!-- Incoming Call Notification -->
   <div class="incoming-call" id="incoming-call">
     <div class="incoming-call-card">
