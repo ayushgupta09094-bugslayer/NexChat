@@ -292,6 +292,54 @@ export async function updateUserProfilePhoto(uid, file) {
   return uploaded.url;
 }
 
+export async function updateUserDisplayName(uid, newName) {
+  if (!uid || !auth.currentUser || auth.currentUser.uid !== uid) {
+    throw new Error("You can only update your own username.");
+  }
+  const cleanName = String(newName || "").trim().replace(/\s+/g, " ");
+  if (cleanName.length < 2) throw new Error("Username must be at least 2 characters.");
+  if (cleanName.length > 40) throw new Error("Username can be maximum 40 characters.");
+
+  await updateProfile(auth.currentUser, { displayName: cleanName });
+
+  const userRef = doc(db, COLLECTIONS.USERS, uid);
+  const userSnap = await getDoc(userRef);
+  const old = userSnap.exists() ? (userSnap.data() || {}) : {};
+  const photoURL = old.photoURL || old.profilePhotoURL || old.profilePhoto || old.profilePic || auth.currentUser.photoURL || "";
+  const profile = publicProfileFields(auth.currentUser, {
+    name: cleanName,
+    email: old.email || auth.currentUser.email || "",
+    nexId: old.nexId || makeNexId(uid),
+    photoURL,
+    photoPublicId: old.photoPublicId || ""
+  });
+
+  await setDoc(userRef, {
+    ...profile,
+    searchTokens: makeSearchTokens(profile),
+    updatedAt: serverTimestamp()
+  }, { merge: true });
+
+  await upsertUserLookup(auth.currentUser, profile);
+
+  // Keep existing chat list names in sync after username change.
+  try {
+    const chatsSnap = await getDocs(query(collection(db, COLLECTIONS.CHATS), where("members", "array-contains", uid)));
+    const updates = [];
+    chatsSnap.forEach(chatDoc => {
+      const chat = chatDoc.data() || {};
+      updates.push(setDoc(doc(db, COLLECTIONS.CHATS, chatDoc.id), {
+        memberNames: { ...(chat.memberNames || {}), [uid]: cleanName }
+      }, { merge: true }));
+    });
+    await Promise.all(updates);
+  } catch (err) {
+    console.warn("Could not sync username into old chats:", err);
+  }
+
+  return cleanName;
+}
+
 // ════════════════════════════════════════════════════════════
 //  AUTH — SIGN OUT
 // ════════════════════════════════════════════════════════════

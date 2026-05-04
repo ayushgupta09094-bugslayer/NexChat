@@ -12,6 +12,7 @@ import {
   findUserByPublicId,
   searchUsersByQuery,
   updateUserProfilePhoto,
+  updateUserDisplayName,
   startIncomingCallsListener,
   stopIncomingCallsListener,
   createCall,
@@ -160,6 +161,24 @@ function rawSafeUrl(url = "") {
   const u = String(url || "");
   return /^https:\/\//i.test(u) ? u : "";
 }
+function userPhotoURL(userOrUrl = "") {
+  if (typeof userOrUrl === "string") return rawSafeUrl(userOrUrl);
+  const u = userOrUrl || {};
+  return rawSafeUrl(
+    u.photoURL ||
+    u.profilePhotoURL ||
+    u.profilePhoto ||
+    u.profilePic ||
+    u.avatarURL ||
+    u.avatarUrl ||
+    u.avatar ||
+    u.picture ||
+    u.photo ||
+    u.imageUrl ||
+    u.imageURL ||
+    ""
+  );
+}
 function cloudinaryDownloadUrl(url = "", name = "nexchat-file") {
   const raw = rawSafeUrl(url);
   if (!raw) return "";
@@ -214,6 +233,8 @@ function rememberContact(user = {}) {
   if (!id) return null;
   const merged = { ...(contactCache.get(id) || {}), ...user, id, uid: id };
   merged.name = displayUserName(merged, merged.name || merged.displayName || merged.email || "NexUser");
+  const photo = userPhotoURL(merged);
+  if (photo) merged.photoURL = photo;
   contactCache.set(id, merged);
   return merged;
 }
@@ -387,7 +408,7 @@ export function onAuthReady(user, isLoggedIn) {
 // ════════════════════════════════════════════════════════════
 async function initAppUI() {
   const name = displayUserName({ displayName: currentUser.displayName, email: currentUser.email, uid: currentUser.uid }, "NexUser");
-  const photoURL = currentUser.photoURL || "";
+  const photoURL = userPhotoURL(currentUser) || "";
   applyAvatar($("profile-av-big"), currentUser.uid, name, photoURL);
   $("profile-disp-name").textContent  = name;
   $("profile-disp-email").textContent = currentUser.email;
@@ -403,7 +424,8 @@ async function initAppUI() {
     if (fresh) {
       const freshName = displayUserName({ ...fresh, id: currentUser.uid, uid: currentUser.uid, email: currentUser.email, displayName: currentUser.displayName }, name);
       rememberContact({ ...fresh, id: currentUser.uid, uid: currentUser.uid, name: freshName });
-      applyAvatar($("profile-av-big"), currentUser.uid, freshName, fresh.photoURL || photoURL);
+      const freshPhoto = userPhotoURL(fresh) || photoURL;
+      applyAvatar($("profile-av-big"), currentUser.uid, freshName, freshPhoto);
       $("profile-disp-name").textContent = freshName;
       if ($("profile-user-id")) $("profile-user-id").textContent = publicUserId({ ...fresh, uid: currentUser.uid });
     }
@@ -504,15 +526,16 @@ function renderUsersList(users, hasQuery = false) {
     const name  = displayUserName(u);
     const email = String(u.email || "");
     const nexId = publicUserId(u);
+    const photoURL = userPhotoURL(u);
 
     const item = document.createElement("button");
     item.type = "button";
     item.className = "user-item";
     item.setAttribute("aria-label", `Start chat with ${name}`);
-    const hasPhoto = !!rawSafeUrl(u.photoURL);
+    const hasPhoto = !!photoURL;
     item.innerHTML = `
-      <div class="c-avatar${avatarClass(u.photoURL)}" style="${hasPhoto ? "" : avatarStyle(u.id)};width:44px;height:44px;border-radius:13px;font-size:16px">
-        ${avatarHTML(name, u.photoURL)}
+      <div class="c-avatar${avatarClass(photoURL)}" style="${hasPhoto ? "" : avatarStyle(u.id)};width:44px;height:44px;border-radius:13px;font-size:16px">
+        ${avatarHTML(name, photoURL)}
         <div class="status-dot${userIsOnline(u) ? "" : " offline"}"></div>
       </div>
       <div class="user-item-text">
@@ -587,7 +610,7 @@ function chatContactSummary(chat) {
   const cached = otherId ? contactCache.get(otherId) : null;
   const fallback = isRealDisplayName(memberName) ? memberName : "NexUser";
   const name = displayUserName(cached || { name: memberName }, fallback);
-  const photoURL = cached?.photoURL || "";
+  const photoURL = userPhotoURL(cached || {});
   return { otherId, name, photoURL, cached };
 }
 
@@ -602,7 +625,7 @@ function refreshChatContactInList(chat, version) {
     const nameEl = item.querySelector(".c-name");
     if (nameEl) nameEl.textContent = name;
     const avatar = item.querySelector(".c-avatar");
-    if (avatar) applyAvatar(avatar, otherId, name, user.photoURL, ";flex-shrink:0");
+    if (avatar) applyAvatar(avatar, otherId, name, userPhotoURL(user), ";flex-shrink:0");
   });
 }
 
@@ -707,7 +730,7 @@ async function openChat(contactUid, contactName) {
     statusEl.className   = "chat-h-status";
   }
   const hav = $("chat-h-av");
-  applyAvatar(hav, contactUid, displayName, cData.photoURL, ";width:40px;height:40px;border-radius:12px;font-size:15px");
+  applyAvatar(hav, contactUid, displayName, userPhotoURL(cData), ";width:40px;height:40px;border-radius:12px;font-size:15px");
   // Show active chat view
   $("chat-empty").style.display  = "none";
   $("active-chat").style.display = "flex";
@@ -1310,7 +1333,9 @@ window.handleProfilePhotoSelect = async function(e) {
   try {
     showToast("Updating profile picture…");
     const url = await updateUserProfilePhoto(currentUser.uid, file);
-    applyAvatar($("profile-av-big"), currentUser.uid, currentUser.displayName || "NexUser", url);
+    const displayName = $("profile-disp-name")?.textContent || currentUser.displayName || currentUser.email || "NexUser";
+    rememberContact({ id: currentUser.uid, uid: currentUser.uid, name: displayName, email: currentUser.email, photoURL: url });
+    applyAvatar($("profile-av-big"), currentUser.uid, displayName, url);
     showToast("Profile picture updated ✅");
   } catch (err) {
     console.error("Profile photo error:", err);
@@ -1329,7 +1354,7 @@ window.showUserProfile = async function(uid = currentContactId) {
     const name = displayUserName(fullUser);
     const modal = $("user-profile-modal");
     if (!modal) return;
-    applyAvatar($("view-profile-av"), uid, name, fullUser.photoURL, ";width:96px;height:96px;border-radius:28px;font-size:28px");
+    applyAvatar($("view-profile-av"), uid, name, userPhotoURL(fullUser), ";width:96px;height:96px;border-radius:28px;font-size:28px");
     $("view-profile-name").textContent = name;
     $("view-profile-email").textContent = fullUser.email || "";
     $("view-profile-id").textContent = publicUserId({ ...fullUser, uid });
@@ -1351,6 +1376,49 @@ window.viewCurrentProfile = function() {
 };
 window.closeUserProfile = function() {
   $("user-profile-modal")?.classList.remove("show");
+};
+
+// ════════════════════════════════════════════════════════════
+//  USERNAME UPDATE
+// ════════════════════════════════════════════════════════════
+window.openUsernameEdit = function() {
+  const form = $("profile-name-edit-form");
+  const input = $("profile-name-input");
+  if (!form || !input) return;
+  input.value = ($("profile-disp-name")?.textContent || currentUser?.displayName || "").trim();
+  form.classList.add("show");
+  setTimeout(() => input.focus(), 50);
+};
+
+window.cancelUsernameEdit = function() {
+  const form = $("profile-name-edit-form");
+  if (form) form.classList.remove("show");
+};
+
+window.handleUsernameUpdate = async function(e) {
+  e.preventDefault();
+  if (!currentUser) return;
+  const input = $("profile-name-input");
+  const newName = String(input?.value || "").trim();
+  if (newName.length < 2) { showToast("Username must be at least 2 characters."); return; }
+  if (newName.length > 40) { showToast("Username can be maximum 40 characters."); return; }
+  const btn = $("profile-name-save-btn");
+  btn?.classList.add("loading");
+  try {
+    await updateUserDisplayName(currentUser.uid, newName);
+    currentUser.displayName = newName;
+    $("profile-disp-name").textContent = newName;
+    const currentPhoto = userPhotoURL(contactCache.get(currentUser.uid)) || userPhotoURL(currentUser) || userPhotoURL({ photoURL: $("profile-av-big")?.querySelector("img")?.src || "" });
+    rememberContact({ id: currentUser.uid, uid: currentUser.uid, name: newName, email: currentUser.email, photoURL: currentPhoto });
+    applyAvatar($("profile-av-big"), currentUser.uid, newName, currentPhoto);
+    cancelUsernameEdit();
+    showToast("Username updated ✅");
+  } catch (err) {
+    console.error("Username update error:", err);
+    showToast(err.message || friendlyErr(err.code));
+  } finally {
+    btn?.classList.remove("loading");
+  }
 };
 
 // ════════════════════════════════════════════════════════════

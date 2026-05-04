@@ -122,6 +122,16 @@
               <button class="profile-photo-btn" type="button" onclick="chooseProfilePhoto()">
                 <i class="fa-solid fa-camera"></i> Change profile picture
               </button>
+              <button class="profile-photo-btn" type="button" onclick="openUsernameEdit()">
+                <i class="fa-solid fa-pen"></i> Change username
+              </button>
+              <form class="profile-name-edit-form" id="profile-name-edit-form" onsubmit="handleUsernameUpdate(event)">
+                <input type="text" id="profile-name-input" maxlength="40" minlength="2" placeholder="New username"/>
+                <div class="profile-name-actions">
+                  <button type="submit" id="profile-name-save-btn">Save</button>
+                  <button type="button" onclick="cancelUsernameEdit()">Cancel</button>
+                </div>
+              </form>
             </div>
             <div class="profile-info-card">
               <div class="profile-info-label">About</div>
