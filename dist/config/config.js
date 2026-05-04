@@ -21,24 +21,11 @@ export const COLLECTIONS = Object.freeze({
   CALLS: "calls"
 });
 
-// ============================================================
-//  Cloudinary Configuration
-//  Used only for photo/file uploads.
-//  Create an unsigned upload preset in Cloudinary and paste it here.
-// ============================================================
-
 export const CLOUDINARY_CONFIG = Object.freeze({
   cloudName: "dayaa7wrp",
   uploadPreset: "nexchat_uploads",
   folder: "nexchat_uploads"
 });
-
-
-
-// ============================================================
-//  GIPHY Configuration
-//  Create a free GIPHY API key and paste it here for GIF search.
-// ============================================================
 
 export const GIPHY_CONFIG = Object.freeze({
   apiKey: "PomEiuc0Fd7irxhF6DuFvq4kn8HmRZcI",

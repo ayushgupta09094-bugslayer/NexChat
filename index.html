@@ -66,13 +66,6 @@
             </div>
           </div>
           <div>
-            <div class="field-label">Profile Picture <span class="optional-label">Optional</span></div>
-            <div class="input-wrap file-field-wrap">
-              <input type="file" id="signup-photo" accept="image/*"/>
-              <i class="fa-solid fa-camera"></i>
-            </div>
-          </div>
-          <div>
             <div class="field-label">Email Address</div>
             <div class="input-wrap">
               <input type="email" id="signup-email" placeholder="you@example.com" required/>
@@ -112,16 +105,12 @@
           </div>
           <div class="profile-content">
             <div class="profile-avatar-wrap">
-              <div class="profile-av-big clickable-profile" id="profile-av-big" onclick="chooseProfilePhoto()" title="Change profile picture">N</div>
+              <div class="profile-av-big" id="profile-av-big">N</div>
               <div class="profile-display-name" id="profile-disp-name">Username</div>
               <div class="profile-display-email" id="profile-disp-email">email@example.com</div>
               <div class="premium-badge">
                 <i class="fa-solid fa-crown"></i> Premium Member
               </div>
-              <input type="file" id="profile-photo-input" accept="image/*" hidden onchange="handleProfilePhotoSelect(event)"/>
-              <button class="profile-photo-btn" type="button" onclick="chooseProfilePhoto()">
-                <i class="fa-solid fa-camera"></i> Change profile picture
-              </button>
               <button class="profile-photo-btn" type="button" onclick="openUsernameEdit()">
                 <i class="fa-solid fa-pen"></i> Change username
               </button>

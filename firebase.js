@@ -225,23 +225,11 @@ async function ensureUserDoc(user) {
 // ════════════════════════════════════════════════════════════
 //  AUTH — SIGN UP
 // ════════════════════════════════════════════════════════════
-export async function signUp(name, email, password, profileFile = null) {
+export async function signUp(name, email, password) {
   const cred = await createUserWithEmailAndPassword(auth, email, password);
 
-  let photoURL = "";
-  let photoPublicId = "";
-  if (profileFile) {
-    const fileType = profileFile.type || "";
-    if (!fileType.startsWith("image/")) throw new Error("Profile picture must be an image.");
-    if (profileFile.size > 5 * 1024 * 1024) throw new Error("Profile picture is too large. Maximum size is 5 MB.");
-    const cleanName = safeFileName(profileFile.name || `profile-${cred.user.uid}.jpg`);
-    const uploaded = await uploadToCloudinary(profileFile, `profiles/${cred.user.uid}`, cleanName, "nexchat,profile-photo");
-    photoURL = uploaded.url;
-    photoPublicId = uploaded.publicId;
-  }
-
-  await updateProfile(cred.user, { displayName: name, ...(photoURL ? { photoURL } : {}) });
-  const profile = publicProfileFields(cred.user, { name, email, photoURL, photoPublicId });
+  await updateProfile(cred.user, { displayName: name });
+  const profile = publicProfileFields(cred.user, { name, email });
   const userData = {
     ...profile,
     searchTokens: makeSearchTokens(profile),
@@ -264,32 +252,7 @@ export async function signIn(email, password) {
 }
 
 export async function updateUserProfilePhoto(uid, file) {
-  if (!uid || !file) throw new Error("No profile photo selected.");
-  if (!auth.currentUser || auth.currentUser.uid !== uid) throw new Error("You can only update your own profile photo.");
-  const fileType = file.type || "";
-  if (!fileType.startsWith("image/")) throw new Error("Profile picture must be an image.");
-  if (file.size > 5 * 1024 * 1024) throw new Error("Profile picture is too large. Maximum size is 5 MB.");
-  const cleanName = safeFileName(file.name || `profile-${uid}.jpg`);
-  const uploaded = await uploadToCloudinary(file, `profiles/${uid}`, cleanName, "nexchat,profile-photo");
-  await updateProfile(auth.currentUser, { photoURL: uploaded.url });
-  const userSnap = await getDoc(doc(db, COLLECTIONS.USERS, uid));
-  const old = userSnap.exists() ? userSnap.data() : {};
-  const profile = publicProfileFields(auth.currentUser, {
-    name: isRealName(old.name) ? old.name : (isRealName(auth.currentUser.displayName) ? auth.currentUser.displayName : bestStoredName({ email: old.email || auth.currentUser.email || "" })),
-    email: old.email || auth.currentUser.email || "",
-    photoURL: uploaded.url,
-    photoPublicId: uploaded.publicId
-  });
-  await setDoc(doc(db, COLLECTIONS.USERS, uid), {
-    ...old,
-    ...profile,
-    searchTokens: makeSearchTokens(profile),
-    photoURL: uploaded.url,
-    photoPublicId: uploaded.publicId,
-    updatedAt: serverTimestamp()
-  }, { merge: true });
-  await upsertUserLookup(auth.currentUser, profile);
-  return uploaded.url;
+  throw new Error("Profile picture feature has been removed.");
 }
 
 export async function updateUserDisplayName(uid, newName) {

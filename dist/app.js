@@ -11,7 +11,6 @@ import {
   watchContactStatus,
   findUserByPublicId,
   searchUsersByQuery,
-  updateUserProfilePhoto,
   updateUserDisplayName,
   startIncomingCallsListener,
   stopIncomingCallsListener,
@@ -162,22 +161,7 @@ function rawSafeUrl(url = "") {
   return /^https:\/\//i.test(u) ? u : "";
 }
 function userPhotoURL(userOrUrl = "") {
-  if (typeof userOrUrl === "string") return rawSafeUrl(userOrUrl);
-  const u = userOrUrl || {};
-  return rawSafeUrl(
-    u.photoURL ||
-    u.profilePhotoURL ||
-    u.profilePhoto ||
-    u.profilePic ||
-    u.avatarURL ||
-    u.avatarUrl ||
-    u.avatar ||
-    u.picture ||
-    u.photo ||
-    u.imageUrl ||
-    u.imageURL ||
-    ""
-  );
+  return "";
 }
 function cloudinaryDownloadUrl(url = "", name = "nexchat-file") {
   const raw = rawSafeUrl(url);
@@ -190,18 +174,16 @@ function cloudinaryDownloadUrl(url = "", name = "nexchat-file") {
   return raw.replace("/upload/", `/upload/fl_attachment:${encodeURIComponent(baseName)}/`);
 }
 function avatarHTML(name = "", photoURL = "") {
-  const src = rawSafeUrl(photoURL);
-  return src ? `<img src="${esc(src)}" alt="${esc(name || "User")}"/>` : esc(initials(name));
+  return esc(initials(name));
 }
 function avatarClass(photoURL = "") {
-  return rawSafeUrl(photoURL) ? " has-photo" : "";
+  return "";
 }
 function applyAvatar(el, uid, name, photoURL, extraCss = "") {
   if (!el) return;
-  const hasPhoto = !!rawSafeUrl(photoURL);
-  el.classList.toggle("has-photo", hasPhoto);
-  el.style.cssText = (hasPhoto ? "" : avatarStyle(uid)) + extraCss;
-  el.innerHTML = avatarHTML(name, photoURL);
+  el.classList.remove("has-photo");
+  el.style.cssText = avatarStyle(uid) + extraCss;
+  el.innerHTML = avatarHTML(name);
 }
 function publicUserId(user = {}) {
   const uid = String(user.uid || user.id || "");
@@ -461,13 +443,11 @@ window.handleSignup = async function(e) {
   const email = $("signup-email").value.trim();
   const pass  = $("signup-password").value;
   const conf  = $("signup-confirm").value;
-  const photo = $("signup-photo")?.files?.[0] || null;
   if (pass !== conf) { showErr("signup-error", "Passwords do not match."); return; }
-  if (photo && !photo.type.startsWith("image/")) { showErr("signup-error", "Profile picture must be an image."); return; }
   btn.disabled   = true;
   btn.textContent = "Creating account…";
   try {
-    await signUp(name, email, pass, photo);
+    await signUp(name, email, pass);
     showToast(`Welcome to NexChat, ${name}! 🎉⚡`);
   } catch (err) {
     showErr("signup-error", friendlyErr(err.code));
@@ -1317,31 +1297,10 @@ window.captureCameraPhoto = async function() {
 };
 
 // ════════════════════════════════════════════════════════════
-//  PROFILE PHOTOS + USER PROFILE VIEW
+//  USER PROFILE VIEW
 // ════════════════════════════════════════════════════════════
-window.chooseProfilePhoto = function() {
-  $("profile-photo-input")?.click();
-};
-window.handleProfilePhotoSelect = async function(e) {
-  const file = e.target.files?.[0];
-  e.target.value = "";
-  if (!file || !currentUser) return;
-  if (!file.type.startsWith("image/")) {
-    showToast("Profile picture must be an image.");
-    return;
-  }
-  try {
-    showToast("Updating profile picture…");
-    const url = await updateUserProfilePhoto(currentUser.uid, file);
-    const displayName = $("profile-disp-name")?.textContent || currentUser.displayName || currentUser.email || "NexUser";
-    rememberContact({ id: currentUser.uid, uid: currentUser.uid, name: displayName, email: currentUser.email, photoURL: url });
-    applyAvatar($("profile-av-big"), currentUser.uid, displayName, url);
-    showToast("Profile picture updated ✅");
-  } catch (err) {
-    console.error("Profile photo error:", err);
-    showToast(err.message || friendlyErr(err.code));
-  }
-};
+window.chooseProfilePhoto = function() {};
+window.handleProfilePhotoSelect = function() {};
 window.showUserProfile = async function(uid = currentContactId) {
   if (!uid) return;
   try {
@@ -1354,7 +1313,7 @@ window.showUserProfile = async function(uid = currentContactId) {
     const name = displayUserName(fullUser);
     const modal = $("user-profile-modal");
     if (!modal) return;
-    applyAvatar($("view-profile-av"), uid, name, userPhotoURL(fullUser), ";width:96px;height:96px;border-radius:28px;font-size:28px");
+    applyAvatar($("view-profile-av"), uid, name, "", ";width:96px;height:96px;border-radius:28px;font-size:28px");
     $("view-profile-name").textContent = name;
     $("view-profile-email").textContent = fullUser.email || "";
     $("view-profile-id").textContent = publicUserId({ ...fullUser, uid });
@@ -1408,9 +1367,8 @@ window.handleUsernameUpdate = async function(e) {
     await updateUserDisplayName(currentUser.uid, newName);
     currentUser.displayName = newName;
     $("profile-disp-name").textContent = newName;
-    const currentPhoto = userPhotoURL(contactCache.get(currentUser.uid)) || userPhotoURL(currentUser) || userPhotoURL({ photoURL: $("profile-av-big")?.querySelector("img")?.src || "" });
-    rememberContact({ id: currentUser.uid, uid: currentUser.uid, name: newName, email: currentUser.email, photoURL: currentPhoto });
-    applyAvatar($("profile-av-big"), currentUser.uid, newName, currentPhoto);
+    rememberContact({ id: currentUser.uid, uid: currentUser.uid, name: newName, email: currentUser.email });
+    applyAvatar($("profile-av-big"), currentUser.uid, newName, "");
     cancelUsernameEdit();
     showToast("Username updated ✅");
   } catch (err) {
