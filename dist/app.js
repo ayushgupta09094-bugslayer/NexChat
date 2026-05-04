@@ -66,6 +66,8 @@ let renderFrame      = null;
 let seenTimer        = null;
 let giphySearchTimer = null;
 let selectedGif      = null;
+let contactCache     = new Map();
+let chatRenderVersion = 0;
 const RTC_CONFIG = {
   iceServers: [
     { urls: "stun:stun.l.google.com:19302" },
@@ -185,6 +187,45 @@ function applyAvatar(el, uid, name, photoURL, extraCss = "") {
 function publicUserId(user = {}) {
   const uid = String(user.uid || user.id || "");
   return String(user.nexId || (uid ? `NEX-${uid.slice(0, 10).toUpperCase()}` : "NEX-USER"));
+}
+function isRealDisplayName(value = "") {
+  const name = String(value || "").trim();
+  return !!name && name.toLowerCase() !== "nexuser";
+}
+function fallbackNameFromEmail(email = "") {
+  const local = String(email || "").split("@")[0].trim();
+  if (!local) return "";
+  return local
+    .replace(/[._-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b\w/g, c => c.toUpperCase());
+}
+function displayUserName(user = {}, fallback = "NexUser") {
+  if (isRealDisplayName(user.name)) return String(user.name).trim();
+  if (isRealDisplayName(user.displayName)) return String(user.displayName).trim();
+  const emailName = fallbackNameFromEmail(user.email);
+  if (emailName) return emailName;
+  if (isRealDisplayName(fallback)) return String(fallback).trim();
+  return fallbackNameFromEmail(user.fallbackEmail) || "NexUser";
+}
+function rememberContact(user = {}) {
+  const id = user.uid || user.id;
+  if (!id) return null;
+  const merged = { ...(contactCache.get(id) || {}), ...user, id, uid: id };
+  merged.name = displayUserName(merged, merged.name || merged.displayName || merged.email || "NexUser");
+  contactCache.set(id, merged);
+  return merged;
+}
+function cachedContactName(uid = "", fallback = "NexUser") {
+  const cached = uid ? contactCache.get(uid) : null;
+  return displayUserName(cached || {}, fallback);
+}
+function refreshContactCache(uid, fallback = "NexUser") {
+  if (!uid || contactCache.has(uid)) return Promise.resolve(contactCache.get(uid));
+  return getUserData(uid)
+    .then(data => data ? rememberContact({ ...data, id: uid, uid, fallbackName: fallback }) : null)
+    .catch(err => { console.warn("Could not refresh contact profile:", err); return null; });
 }
 function matchUserSearch(user, q) {
   const needle = String(q || "").trim().toLowerCase();
@@ -345,7 +386,7 @@ export function onAuthReady(user, isLoggedIn) {
 //  INIT APP UI — populate profile & avatar
 // ════════════════════════════════════════════════════════════
 async function initAppUI() {
-  const name = currentUser.displayName || "NexUser";
+  const name = displayUserName({ displayName: currentUser.displayName, email: currentUser.email, uid: currentUser.uid }, "NexUser");
   const photoURL = currentUser.photoURL || "";
   applyAvatar($("profile-av-big"), currentUser.uid, name, photoURL);
   $("profile-disp-name").textContent  = name;
@@ -360,8 +401,10 @@ async function initAppUI() {
   try {
     const fresh = await getUserData(currentUser.uid);
     if (fresh) {
-      applyAvatar($("profile-av-big"), currentUser.uid, fresh.name || name, fresh.photoURL || photoURL);
-      $("profile-disp-name").textContent = fresh.name || name;
+      const freshName = displayUserName({ ...fresh, id: currentUser.uid, uid: currentUser.uid, email: currentUser.email, displayName: currentUser.displayName }, name);
+      rememberContact({ ...fresh, id: currentUser.uid, uid: currentUser.uid, name: freshName });
+      applyAvatar($("profile-av-big"), currentUser.uid, freshName, fresh.photoURL || photoURL);
+      $("profile-disp-name").textContent = freshName;
       if ($("profile-user-id")) $("profile-user-id").textContent = publicUserId({ ...fresh, uid: currentUser.uid });
     }
   } catch (err) {
@@ -456,8 +499,9 @@ function renderUsersList(users, hasQuery = false) {
 
   list.innerHTML = "";
 
-  safeUsers.forEach(u => {
-    const name  = String(u.name || u.displayName || "NexUser");
+  safeUsers.forEach(rawUser => {
+    const u = rememberContact(rawUser) || rawUser;
+    const name  = displayUserName(u);
     const email = String(u.email || "");
     const nexId = publicUserId(u);
 
@@ -531,28 +575,58 @@ window.copyMyId = async function() {
 //  CHATS — Callback from firebase.js
 // ════════════════════════════════════════════════════════════
 export function onChatsUpdate(chats) {
-  allChats = chats;
+  allChats = Array.isArray(chats) ? chats : [];
   allChats.forEach(maybeNotifyChat);
   chatsSeenOnce = true;
   renderChatsList(allChats);
 }
+
+function chatContactSummary(chat) {
+  const otherId = chat.members?.find(m => m !== currentUser?.uid) || "";
+  const memberName = chat.memberNames?.[otherId] || "";
+  const cached = otherId ? contactCache.get(otherId) : null;
+  const fallback = isRealDisplayName(memberName) ? memberName : "NexUser";
+  const name = displayUserName(cached || { name: memberName }, fallback);
+  const photoURL = cached?.photoURL || "";
+  return { otherId, name, photoURL, cached };
+}
+
+function refreshChatContactInList(chat, version) {
+  const otherId = chat.members?.find(m => m !== currentUser?.uid);
+  if (!otherId) return;
+  refreshContactCache(otherId, chat.memberNames?.[otherId] || "NexUser").then(user => {
+    if (!user || version !== chatRenderVersion) return;
+    const item = $("ci-" + chat.id);
+    if (!item) return;
+    const name = displayUserName(user, chat.memberNames?.[otherId] || "NexUser");
+    const nameEl = item.querySelector(".c-name");
+    if (nameEl) nameEl.textContent = name;
+    const avatar = item.querySelector(".c-avatar");
+    if (avatar) applyAvatar(avatar, otherId, name, user.photoURL, ";flex-shrink:0");
+  });
+}
+
 function renderChatsList(chats) {
   const list  = $("chats-list");
   const noMsg = $("no-chats-msg");
+  if (!list || !noMsg) return;
+  chatRenderVersion += 1;
+  const version = chatRenderVersion;
   [...list.children].forEach(c => { if (c.id !== "no-chats-msg") c.remove(); });
   if (!chats.length) { noMsg.style.display = "flex"; return; }
   noMsg.style.display = "none";
   chats.forEach(chat => {
-    const otherId   = chat.members.find(m => m !== currentUser.uid);
-    const otherName = chat.memberNames?.[otherId] || "User";
+    const { otherId, name: otherName, photoURL } = chatContactSummary(chat);
+    if (!otherId) return;
     const lastMsg   = chat.lastMessage || "";
     const timeStr   = fmtChatTime(chat.lastMessageTime);
     const isActive  = chat.id === currentChatId;
     const div = document.createElement("div");
     div.className = "chat-item" + (isActive ? " active" : "");
     div.id        = "ci-" + chat.id;
+    const hasPhoto = !!rawSafeUrl(photoURL);
     div.innerHTML = `
-      <div class="c-avatar" style="${avatarStyle(otherId)};flex-shrink:0">${initials(otherName)}</div>
+      <div class="c-avatar${avatarClass(photoURL)}" style="${hasPhoto ? "" : avatarStyle(otherId)};flex-shrink:0">${avatarHTML(otherName, photoURL)}</div>
       <div class="chat-info">
         <div class="chat-info-top">
           <span class="c-name">${esc(otherName)}</span>
@@ -564,8 +638,9 @@ function renderChatsList(chats) {
             : "<em>Start the conversation…</em>"}
         </div>
       </div>`;
-    div.onclick = () => openChat(otherId, otherName);
+    div.onclick = () => openChat(otherId, cachedContactName(otherId, otherName));
     list.appendChild(div);
+    refreshChatContactInList(chat, version);
   });
 }
 window.filterChats = function() {
@@ -573,8 +648,10 @@ window.filterChats = function() {
   if (!q) { renderChatsList(allChats); return; }
   renderChatsList(allChats.filter(c => {
     const oid  = c.members.find(m => m !== currentUser.uid);
-    const name = (c.memberNames?.[oid] || "").toLowerCase();
-    return name.includes(q);
+    const cached = oid ? contactCache.get(oid) : null;
+    const name = displayUserName(cached || { name: c.memberNames?.[oid] || "", email: cached?.email || "" }, c.memberNames?.[oid] || "").toLowerCase();
+    const last = String(c.lastMessage || "").toLowerCase();
+    return name.includes(q) || last.includes(q);
   }));
 };
 // ════════════════════════════════════════════════════════════
@@ -601,18 +678,24 @@ async function openChat(contactUid, contactName) {
   if (!contactUid) throw new Error("Missing contact uid.");
 
   currentContactId = contactUid;
+  // Fetch contact data before creating/updating chat so old "NexUser" names
+  // are replaced with the real profile name/fallback email name.
+  const cData = await getUserData(contactUid) || {};
+  rememberContact({ ...cData, id: contactUid, uid: contactUid });
+  const contactDisplayForChat = displayUserName({ ...cData, id: contactUid, uid: contactUid }, contactName || "NexUser");
+  const myData = await getUserData(currentUser.uid).catch(() => null);
+  if (myData) rememberContact({ ...myData, id: currentUser.uid, uid: currentUser.uid });
+  const myDisplayForChat = displayUserName({ ...(myData || {}), id: currentUser.uid, uid: currentUser.uid, email: currentUser.email, displayName: currentUser.displayName }, currentUser.displayName || currentUser.email || "NexUser");
   currentChatId    = await getOrCreateChat(
     currentUser.uid,
-    currentUser.displayName || "NexUser",
+    myDisplayForChat,
     contactUid,
-    contactName
+    contactDisplayForChat
   );
-  // Fetch contact data
-  const cData = await getUserData(contactUid) || {};
   currentContactData = cData;
   const blockState = await isContactBlocked(currentUser.uid, contactUid).catch(() => ({ iBlocked: false, theyBlocked: false, blocked: false }));
   contactBlocked = !!blockState.blocked;
-  const displayName = cData.name || contactName || "NexUser";
+  const displayName = displayUserName({ ...cData, id: contactUid, uid: contactUid }, contactDisplayForChat || contactName || "NexUser");
   // Update header
   $("chat-h-name").textContent = displayName;
   const statusEl = $("chat-h-status");
@@ -1242,15 +1325,16 @@ window.showUserProfile = async function(uid = currentContactId) {
       showToast("Profile not found.");
       return;
     }
-    const name = user.name || user.displayName || "NexUser";
+    const fullUser = rememberContact({ ...user, id: uid, uid }) || { ...user, id: uid, uid };
+    const name = displayUserName(fullUser);
     const modal = $("user-profile-modal");
     if (!modal) return;
-    applyAvatar($("view-profile-av"), uid, name, user.photoURL, ";width:96px;height:96px;border-radius:28px;font-size:28px");
+    applyAvatar($("view-profile-av"), uid, name, fullUser.photoURL, ";width:96px;height:96px;border-radius:28px;font-size:28px");
     $("view-profile-name").textContent = name;
-    $("view-profile-email").textContent = user.email || "";
-    $("view-profile-id").textContent = publicUserId({ ...user, uid });
-    const live = userIsOnline(user);
-    $("view-profile-status").textContent = live ? "online" : "last seen " + fmtLastSeen(user.lastSeen || user.lastActive);
+    $("view-profile-email").textContent = fullUser.email || "";
+    $("view-profile-id").textContent = publicUserId({ ...fullUser, uid });
+    const live = userIsOnline(fullUser);
+    $("view-profile-status").textContent = live ? "online" : "last seen " + fmtLastSeen(fullUser.lastSeen || fullUser.lastActive);
     $("view-profile-status").className = "profile-view-status" + (live ? " online" : "");
     $("view-profile-msg-btn").onclick = () => {
       closeUserProfile();
@@ -1322,6 +1406,19 @@ function setCallStatus(text) {
   const el = $("call-status");
   if (el) el.textContent = text;
 }
+function attachStreamToVideo(videoId, stream, muted = false) {
+  const video = $(videoId);
+  if (!video || !stream) return;
+  video.srcObject = stream;
+  video.muted = !!muted;
+  video.playsInline = true;
+  const play = () => video.play?.().catch(() => {});
+  if (video.readyState >= 2) play();
+  video.onloadedmetadata = play;
+}
+function setRemoteVideoReady(isReady) {
+  $("call-modal")?.classList.toggle("has-remote-video", !!isReady);
+}
 function showCallModal(type, name, statusText) {
   const modal = $("call-modal");
   if (!modal) return;
@@ -1331,6 +1428,7 @@ function showCallModal(type, name, statusText) {
   modal.classList.toggle("audio-mode", type !== "video");
   $("call-contact-name").textContent = name || "NexChat User";
   setCallStatus(statusText || "Connecting…");
+  setRemoteVideoReady(false);
   $("camera-btn")?.classList.toggle("hidden", type !== "video");
 }
 async function getCallMedia(type) {
@@ -1357,12 +1455,20 @@ function createPeerConnection(role) {
   currentCallRole = role;
   pendingIce = [];
   remoteStream = new MediaStream();
-  const remoteVideo = $("remote-video");
-  if (remoteVideo) remoteVideo.srcObject = remoteStream;
+  attachStreamToVideo("remote-video", remoteStream, false);
+  setRemoteVideoReady(false);
 
   peerConnection = new RTCPeerConnection(RTC_CONFIG);
   peerConnection.ontrack = event => {
-    event.streams[0]?.getTracks().forEach(track => remoteStream.addTrack(track));
+    const firstStream = event.streams && event.streams[0];
+    if (firstStream) {
+      remoteStream = firstStream;
+      attachStreamToVideo("remote-video", firstStream, false);
+    } else if (event.track) {
+      remoteStream.addTrack(event.track);
+      attachStreamToVideo("remote-video", remoteStream, false);
+    }
+    setRemoteVideoReady(true);
     setCallStatus("Connected");
   };
   peerConnection.onicecandidate = event => {
@@ -1407,7 +1513,7 @@ function cleanupCall(updateRemote = false) {
   const remoteVideo = $("remote-video");
   if (localVideo) localVideo.srcObject = null;
   if (remoteVideo) remoteVideo.srcObject = null;
-  $("call-modal")?.classList.remove("show");
+  $("call-modal")?.classList.remove("show", "has-remote-video");
   activeCallId = null;
   activeCallType = null;
   currentCallRole = null;
@@ -1461,11 +1567,10 @@ window.startCall = async function(type = "audio") {
   }
   try {
     const contact = await getUserData(currentContactId) || {};
-    const contactName = contact.name || $("chat-h-name")?.textContent || "NexChat User";
+    const contactName = displayUserName(contact, $("chat-h-name")?.textContent || "NexChat User");
     showCallModal(type, contactName, type === "video" ? "Starting video call…" : "Starting audio call…");
     localStream = await getCallMedia(type);
-    const localVideo = $("local-video");
-    if (localVideo) localVideo.srcObject = localStream;
+    attachStreamToVideo("local-video", localStream, true);
     createPeerConnection("caller");
     localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
     const offer = await peerConnection.createOffer();
@@ -1497,8 +1602,7 @@ window.acceptIncomingCall = async function() {
     activeCallId = call.id;
     showCallModal(call.type, call.callerName, "Connecting…");
     localStream = await getCallMedia(call.type);
-    const localVideo = $("local-video");
-    if (localVideo) localVideo.srcObject = localStream;
+    attachStreamToVideo("local-video", localStream, true);
     createPeerConnection("callee");
     localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
     await peerConnection.setRemoteDescription(new RTCSessionDescription(call.offer));

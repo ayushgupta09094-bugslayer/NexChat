@@ -123,7 +123,7 @@ service cloud.firestore {
 
       allow update: if isChatMember(chatId)
         && request.resource.data.members == resource.data.members
-        && request.resource.data.memberNames == resource.data.memberNames
+        && request.resource.data.memberNames is map
         && request.resource.data.keys().hasOnly(['members','memberNames','lastMessage','lastMessageTime','lastSenderId','lastSenderName','createdAt'])
         && request.resource.data.lastMessage is string;
 

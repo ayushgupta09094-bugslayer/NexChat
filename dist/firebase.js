@@ -80,6 +80,24 @@ function cleanPublicId(value = "") {
 function normalizeSearchValue(value = "") {
   return String(value || "").trim().toLowerCase();
 }
+function isRealName(value = "") {
+  const name = String(value || "").trim();
+  return !!name && name.toLowerCase() !== "nexuser";
+}
+function fallbackNameFromEmail(email = "") {
+  const local = String(email || "").split("@")[0].trim();
+  if (!local) return "";
+  return local
+    .replace(/[._-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b\w/g, c => c.toUpperCase());
+}
+function bestStoredName(data = {}) {
+  if (isRealName(data.name)) return String(data.name).trim();
+  if (isRealName(data.displayName)) return String(data.displayName).trim();
+  return fallbackNameFromEmail(data.email) || "NexUser";
+}
 function makeSearchTokens(data = {}) {
   const values = [
     data.name,
@@ -114,8 +132,8 @@ function makeSearchTokens(data = {}) {
 }
 function publicProfileFields(user, extra = {}) {
   const nexId = extra.nexId || makeNexId(user.uid);
-  const name = extra.name || user.displayName || "NexUser";
   const email = extra.email || user.email || "";
+  const name = isRealName(extra.name) ? String(extra.name).trim() : (isRealName(user.displayName) ? String(user.displayName).trim() : fallbackNameFromEmail(email) || "NexUser");
   return {
     uid: user.uid,
     name,
@@ -144,33 +162,64 @@ async function upsertUserLookup(user, data = {}) {
 async function ensureUserDoc(user) {
   const ref  = doc(db, COLLECTIONS.USERS, user.uid);
   const snap = await getDoc(ref);
-  const profile = publicProfileFields(user);
-  const baseData = {
-    ...profile,
-    searchTokens: makeSearchTokens(profile),
+  const old  = snap.exists() ? (snap.data() || {}) : {};
+
+  // Important fix: never overwrite a real signup name with the temporary
+  // Firebase Auth value "NexUser". During signup, onAuthStateChanged can run
+  // before updateProfile() finishes, so we preserve the Firestore name and
+  // avoid writing a default name for brand-new docs.
+  const authName = isRealName(user.displayName) ? String(user.displayName).trim() : "";
+  const oldName  = isRealName(old.name) ? String(old.name).trim() : "";
+  const finalName = authName || oldName || (snap.exists() ? bestStoredName(old) : "");
+  const finalEmail = user.email || old.email || "";
+  const finalNexId = old.nexId || makeNexId(user.uid);
+  const finalPhotoURL = old.photoURL || user.photoURL || "";
+  const finalPhotoPublicId = old.photoPublicId || "";
+
+  const tokenProfile = {
+    uid: user.uid,
+    name: finalName || bestStoredName({ email: finalEmail }),
+    email: finalEmail,
+    nexId: finalNexId
+  };
+
+  const writeData = {
+    uid: user.uid,
+    email: finalEmail,
+    emailLower: normalizeSearchValue(finalEmail),
+    nexId: finalNexId,
+    nexIdLower: cleanPublicId(finalNexId),
+    photoURL: finalPhotoURL,
+    photoPublicId: finalPhotoPublicId,
+    searchTokens: makeSearchTokens(tokenProfile),
     online:     true,
     lastSeen:   serverTimestamp(),
     lastActive: serverTimestamp()
   };
+
+  if (finalName) {
+    writeData.name = finalName;
+    writeData.nameLower = normalizeSearchValue(finalName);
+  }
+
   if (!snap.exists()) {
-    await setDoc(ref, { ...baseData, createdAt: serverTimestamp() });
+    await setDoc(ref, { ...writeData, createdAt: serverTimestamp() }, { merge: true });
   } else {
-    const old = snap.data() || {};
-    await updateDoc(ref, {
-      name: profile.name,
-      nameLower: profile.nameLower,
-      emailLower: profile.emailLower,
-      nexId: profile.nexId,
-      nexIdLower: profile.nexIdLower,
-      photoURL: old.photoURL || profile.photoURL || "",
-      photoPublicId: old.photoPublicId || profile.photoPublicId || "",
-      searchTokens: makeSearchTokens({ ...profile, photoURL: old.photoURL || profile.photoURL || "" }),
-      online:     true,
-      lastSeen:   serverTimestamp(),
-      lastActive: serverTimestamp()
+    await updateDoc(ref, writeData);
+  }
+
+  // Only update public lookup with a real/preserved name. This prevents new
+  // signup races from publishing "NexUser" over the correct name.
+  if (finalName) {
+    await upsertUserLookup(user, {
+      uid: user.uid,
+      name: finalName,
+      email: finalEmail,
+      nexId: finalNexId,
+      photoURL: finalPhotoURL,
+      photoPublicId: finalPhotoPublicId
     });
   }
-  await upsertUserLookup(user, { ...baseData, photoURL: snap.exists() ? (snap.data().photoURL || profile.photoURL || "") : profile.photoURL });
 }
 
 // ════════════════════════════════════════════════════════════
@@ -201,7 +250,7 @@ export async function signUp(name, email, password, profileFile = null) {
     lastActive: serverTimestamp(),
     createdAt:  serverTimestamp()
   };
-  await setDoc(doc(db, COLLECTIONS.USERS, cred.user.uid), userData);
+  await setDoc(doc(db, COLLECTIONS.USERS, cred.user.uid), userData, { merge: true });
   await upsertUserLookup(cred.user, userData);
   return cred.user;
 }
@@ -226,7 +275,7 @@ export async function updateUserProfilePhoto(uid, file) {
   const userSnap = await getDoc(doc(db, COLLECTIONS.USERS, uid));
   const old = userSnap.exists() ? userSnap.data() : {};
   const profile = publicProfileFields(auth.currentUser, {
-    name: old.name || auth.currentUser.displayName || "NexUser",
+    name: isRealName(old.name) ? old.name : (isRealName(auth.currentUser.displayName) ? auth.currentUser.displayName : bestStoredName({ email: old.email || auth.currentUser.email || "" })),
     email: old.email || auth.currentUser.email || "",
     photoURL: uploaded.url,
     photoPublicId: uploaded.publicId
@@ -320,7 +369,8 @@ function normalizeUsersFromSnap(snap, currentUid) {
     const isMe = d.id === currentUid || uid === currentUid || (currentEmail && email === currentEmail);
     if (!isMe && !seen.has(uid)) {
       seen.add(uid);
-      users.push({ id: uid, docId: d.id, ...data, uid });
+      const safeName = bestStoredName(data);
+      users.push({ id: uid, docId: d.id, ...data, name: safeName, uid });
     }
   });
 
@@ -470,16 +520,37 @@ export function startChatsListener(uid) {
 // ════════════════════════════════════════════════════════════
 //  CHATS — Create or get chat between two users
 // ════════════════════════════════════════════════════════════
+async function bestNameForUid(uid, providedName = "") {
+  try {
+    const snap = await getDoc(doc(db, COLLECTIONS.USERS, uid));
+    if (snap.exists()) return bestStoredName(snap.data());
+  } catch (err) {
+    console.warn("Could not read user name for chat:", err);
+  }
+  return isRealName(providedName) ? String(providedName).trim() : "NexUser";
+}
+
 export async function getOrCreateChat(myUid, myName, contactUid, contactName) {
   if (!myUid || !contactUid) throw new Error("Missing user id for chat.");
   if (myUid === contactUid) throw new Error("Cannot create a chat with yourself.");
 
   const chatId  = [myUid, contactUid].sort().join("_");
   const chatRef = doc(db, COLLECTIONS.CHATS, chatId);
+  const myBestName = await bestNameForUid(myUid, myName);
+  const contactBestName = await bestNameForUid(contactUid, contactName);
+  const memberNames = { [myUid]: myBestName, [contactUid]: contactBestName };
 
   try {
     const snap = await getDoc(chatRef);
-    if (snap.exists()) return chatId;
+    if (snap.exists()) {
+      const old = snap.data() || {};
+      const oldNames = old.memberNames || {};
+      const needsNameFix = !isRealName(oldNames[myUid]) || !isRealName(oldNames[contactUid]) || oldNames[myUid] !== myBestName || oldNames[contactUid] !== contactBestName;
+      if (needsNameFix) {
+        await setDoc(chatRef, { memberNames: { ...oldNames, ...memberNames } }, { merge: true });
+      }
+      return chatId;
+    }
   } catch (err) {
     if (err?.code !== "permission-denied") throw err;
     console.warn("Chat lookup denied; trying chat creation:", err);
@@ -487,7 +558,7 @@ export async function getOrCreateChat(myUid, myName, contactUid, contactName) {
 
   await setDoc(chatRef, {
     members:         [myUid, contactUid],
-    memberNames:     { [myUid]: myName, [contactUid]: contactName },
+    memberNames,
     lastMessage:     "",
     lastMessageTime: serverTimestamp(),
     lastSenderId:    "",
