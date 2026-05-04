@@ -29,7 +29,7 @@ export const COLLECTIONS = Object.freeze({
 
 export const CLOUDINARY_CONFIG = Object.freeze({
   cloudName: "dayaa7wrp",
-  uploadPreset: "NexChat_upload",
+  uploadPreset: "nexchat_uploads",
   folder: "nexchat_uploads"
 });
 
