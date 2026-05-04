@@ -33,12 +33,14 @@ html, body {
   color: var(--text-primary);
   -webkit-font-smoothing: antialiased;
 }
-
+/* ── Scrollbars ───────────────────────────────────────────── */
 ::-webkit-scrollbar { width: 4px; height: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--gold-5); border-radius: 4px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--gold-4); }
-
+/* ══════════════════════════════════════════════════════════
+   LOADING SCREEN
+   ══════════════════════════════════════════════════════════ */
 #loading-screen {
   position: fixed; inset: 0; z-index: 9999;
   background: var(--bg-deepest);
@@ -81,7 +83,9 @@ html, body {
   animation: loadBar 1.8s ease-out forwards;
 }
 @keyframes loadBar { to { width: 100%; } }
-
+/* ══════════════════════════════════════════════════════════
+   AUTH SCREEN
+   ══════════════════════════════════════════════════════════ */
 #auth-screen {
   display: none; min-height: 100vh;
   align-items: center; justify-content: center;
@@ -177,10 +181,14 @@ html, body {
   color: #fca5a5; border-radius: var(--radius-sm); padding: 10px 14px;
   font-size: 13px; display: none;
 }
-
+/* ══════════════════════════════════════════════════════════
+   MAIN APP LAYOUT
+   ══════════════════════════════════════════════════════════ */
 #app-screen { display: none; height: 100vh; }
 .app-layout { display: flex; height: 100vh; overflow: hidden; }
-
+/* ══════════════════════════════════════════════════════════
+   SIDEBAR
+   ══════════════════════════════════════════════════════════ */
 .sidebar {
   width: 360px; min-width: 280px; flex-shrink: 0;
   background: var(--bg-card);
@@ -299,7 +307,7 @@ html, body {
   transform: translateY(-2px) rotate(15deg);
   box-shadow: 0 8px 30px rgba(255,215,0,0.55);
 }
-
+/* ── Profile Panel ── */
 .profile-panel {
   position: absolute; inset: 0; background: var(--bg-card); z-index: 30;
   transform: translateX(-100%); transition: transform 0.3s ease;
@@ -353,7 +361,7 @@ html, body {
   color: #f87171; transition: all var(--transition);
 }
 .logout-btn:hover { background: rgba(239,68,68,0.1); border-color: rgba(239,68,68,0.6); }
-
+/* ── New Conversation Panel ── */
 .new-conv-panel {
   position: absolute; inset: 0; background: var(--bg-card); z-index: 30;
   transform: translateX(-100%); transition: transform 0.3s ease;
@@ -382,9 +390,11 @@ html, body {
   background: rgba(255,215,0,0.08); padding: 3px 8px; border-radius: 6px;
   border: 1px solid rgba(255,215,0,0.15); flex-shrink: 0;
 }
-
+/* ══════════════════════════════════════════════════════════
+   CHAT AREA
+   ══════════════════════════════════════════════════════════ */
 .chat-area { flex: 1; display: flex; flex-direction: column; min-width: 0; position: relative; }
-
+/* Empty State */
 .chat-empty {
   flex: 1; display: flex; flex-direction: column;
   align-items: center; justify-content: center; gap: 14px;
@@ -412,6 +422,7 @@ html, body {
   border: 1px solid var(--border); margin-top: 8px;
 }
 .chat-empty .enc-note i { color: var(--gold-4); }
+/* Chat Header */
 #active-chat { display: none; flex-direction: column; flex: 1; min-height: 0; }
 .chat-header {
   display: flex; align-items: center; gap: 12px;
@@ -422,6 +433,7 @@ html, body {
 .chat-h-name { font-size: 15px; font-weight: 700; color: var(--text-primary); }
 .chat-h-status { font-size: 12px; color: var(--text-sec); margin-top: 1px; }
 .chat-h-status.online { color: #4ade80; }
+/* Messages Area */
 .messages-area {
   flex: 1; overflow-y: auto; padding: 16px 6%;
   background-color: var(--bg-deep);
@@ -472,6 +484,7 @@ html, body {
 }
 .b-time { font-size: 10.5px; color: var(--text-muted); }
 .b-ticks { font-size: 12px; color: var(--gold-3); }
+/* Typing Indicator */
 .typing-bubble {
   background: var(--bubble-in); border: 1px solid rgba(255,255,255,0.06);
   border-radius: 4px 16px 16px 16px;
@@ -489,6 +502,7 @@ html, body {
   0%, 80%, 100% { transform: scale(0.7); opacity: 0.4; }
   40%           { transform: scale(1.1); opacity: 1; }
 }
+/* Input Area */
 .chat-input-area {
   display: flex; align-items: flex-end; gap: 10px;
   padding: 12px 20px; background: var(--bg-card);
@@ -526,6 +540,8 @@ html, body {
 }
 .send-btn:hover { transform: translateY(-1px); box-shadow: 0 6px 22px rgba(255,215,0,0.5); }
 .send-btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+
+/* ── Attachments / Media Messages ────────────────────────── */
 .bubble.has-attachment { padding: 8px; min-width: 190px; }
 .bubble.has-attachment .bubble-text { padding: 4px 6px 0; }
 .msg-image-link { display: block; text-decoration: none; color: inherit; }
@@ -553,6 +569,9 @@ html, body {
 .input-icon-btn.uploading { color: var(--gold-1); animation: spin 0.9s linear infinite; }
 .input-icon-btn:disabled { opacity: 0.55; cursor: not-allowed; }
 
+/* ══════════════════════════════════════════════════════════
+   TOAST NOTIFICATION
+   ══════════════════════════════════════════════════════════ */
 #toast {
   position: fixed; bottom: 28px; left: 50%;
   transform: translateX(-50%) translateY(80px);
@@ -568,12 +587,18 @@ html, body {
   border-radius: 12px 12px 0 0;
 }
 #toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
+/* ══════════════════════════════════════════════════════════
+   SPINNER
+   ══════════════════════════════════════════════════════════ */
 .spinner {
   width: 28px; height: 28px; border-radius: 50%;
   border: 3px solid var(--bg-elevated); border-top-color: var(--gold-2);
   animation: spin 0.75s linear infinite; margin: 40px auto;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
+/* ══════════════════════════════════════════════════════════
+   RESPONSIVE — MOBILE
+   ══════════════════════════════════════════════════════════ */
 @media (max-width: 720px) {
   html, body, #app-screen, .app-layout { height: 100dvh; min-height: 100dvh; overflow: hidden; }
   .auth-card { max-width: 92vw; border-radius: 20px; }
@@ -603,6 +628,7 @@ html, body {
   #toast { width: calc(100% - 32px); text-align: center; bottom: calc(16px + env(safe-area-inset-bottom)); }
 }
 .back-btn { display: none; }
+/* ── Added: searchable NexChat ID, downloads, and calls ───── */
 .profile-id-row {
   display: flex; align-items: center; justify-content: space-between; gap: 10px;
 }
@@ -710,6 +736,8 @@ html, body {
   .call-modal.audio-mode .call-media { min-height: 0; }
 }
 
+
+/* ── Added: profile pictures, partial user search, camera capture, profile view ── */
 .c-avatar.has-photo,
 .profile-av-big.has-photo {
   background: var(--bg-input) !important;
@@ -1006,3 +1034,49 @@ html, body {
   .select-actions button { padding: 7px 8px; }
   .chat-search-panel { padding: 8px 10px; }
 }
+
+/* ── Added: PC call end fix, no push-notification changes ── */
+.call-top-end {
+  width: 42px; height: 42px; border-radius: 50%; border: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: #ef4444; color: #fff; cursor: pointer; flex-shrink: 0;
+  box-shadow: 0 10px 25px rgba(239,68,68,0.28);
+}
+.call-floating-end {
+  position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
+  width: 58px; height: 58px; border-radius: 50%; border: none;
+  display: none; align-items: center; justify-content: center;
+  background: #ef4444; color: #fff; cursor: pointer; z-index: 10020;
+  font-size: 20px; box-shadow: 0 18px 45px rgba(239,68,68,0.45);
+}
+.call-modal.show .call-floating-end { display: inline-flex; }
+.call-modal.show .call-controls { position: relative; z-index: 10010; }
+.call-modal.show video { pointer-events: none; }
+@media (max-width: 720px) {
+  .call-floating-end { bottom: calc(20px + env(safe-area-inset-bottom)); }
+}
+
+
+/* ═════ Seen / Delete / GIF additions ═════ */
+.b-ticks{display:inline-flex;align-items:center;gap:4px;opacity:.78}
+.b-ticks small{font-size:10px;font-weight:700;letter-spacing:.02em}
+.b-ticks.seen{color:#00d084;opacity:1}
+.select-actions{gap:8px;flex-wrap:wrap}
+#delete-everyone-btn{border-color:rgba(255,99,99,.35);color:#ffb4b4}
+.gif-modal{position:fixed;inset:0;background:rgba(0,0,0,.72);backdrop-filter:blur(8px);display:none;align-items:center;justify-content:center;z-index:1000;padding:16px}
+.gif-modal.show{display:flex}
+.gif-box{width:min(520px,94vw);max-height:min(680px,88vh);background:var(--surface,#151515);border:1px solid rgba(255,204,0,.24);border-radius:24px;box-shadow:0 25px 70px rgba(0,0,0,.55);display:flex;flex-direction:column;overflow:hidden}
+.gif-hdr{display:flex;align-items:center;justify-content:space-between;padding:16px 18px;border-bottom:1px solid rgba(255,204,0,.14)}
+.gif-hdr h3{color:var(--accent,#ffd000);font-size:18px;margin:0}
+.gif-search-wrap{margin:14px;display:flex;align-items:center;gap:10px;background:rgba(255,255,255,.05);border:1px solid rgba(255,204,0,.22);border-radius:14px;padding:0 12px}
+.gif-search-wrap i{color:rgba(255,204,0,.7)}
+.gif-search-wrap input{flex:1;background:transparent;border:0;outline:0;color:var(--text,#fff);height:44px;font-size:14px}
+.gif-results{padding:0 14px 14px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;overflow:auto;min-height:220px}
+.gif-card{border:1px solid rgba(255,204,0,.12);background:rgba(255,255,255,.04);border-radius:14px;overflow:hidden;cursor:pointer;padding:0;aspect-ratio:1.45/1;transition:transform .16s ease,border-color .16s ease}
+.gif-card:hover{transform:translateY(-2px);border-color:rgba(255,204,0,.55)}
+.gif-card img{width:100%;height:100%;object-fit:cover;display:block}
+.gif-empty{grid-column:1/-1;text-align:center;color:var(--text2,#9a8b5d);padding:38px 12px;line-height:1.5}
+.gif-credit{text-align:right;color:var(--text2,#9a8b5d);font-size:11px;padding:0 16px 14px}
+.msg-gif{max-height:260px;object-fit:cover}
+.msg-file-name i{margin-right:5px;color:var(--accent,#ffd000)}
+@media (max-width:720px){.gif-box{width:100%;max-height:82vh;border-radius:20px}.gif-results{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.b-ticks small{display:none}.select-actions button{font-size:12px;padding:8px 10px}}

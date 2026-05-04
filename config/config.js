@@ -1,3 +1,4 @@
+
 export const firebaseConfig = {
   apiKey: "AIzaSyB1lJmDxxpTLuzvctNa8IHIOzeY7m0QVCA",
   authDomain: "nexchat-db758.firebaseapp.com",
@@ -15,9 +16,15 @@ export const COLLECTIONS = Object.freeze({
   CALLS: "calls"
 });
 
+
 export const CLOUDINARY_CONFIG = Object.freeze({
   cloudName: "dayaa7wrp",
   uploadPreset: "NexChat_upload",
   folder: "nexchat_uploads"
 });
 
+export const GIPHY_CONFIG = Object.freeze({
+  apiKey: "YOUR_GIPHPomEiuc0Fd7irxhF6DuFvq4kn8HmRZcIY_API_KEY",
+  rating: "g",
+  limit: 16
+});

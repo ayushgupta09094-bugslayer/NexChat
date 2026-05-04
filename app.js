@@ -7,6 +7,7 @@ import {
   startMessagesListener,
   sendMsg,
   sendFileMsg,
+  sendGifMsg,
   watchContactStatus,
   findUserByPublicId,
   searchUsersByQuery,
@@ -20,13 +21,19 @@ import {
   listenCallDoc,
   listenIceCandidates,
   deleteMessages,
+  deleteMessagesForMe,
+  deleteMessagesForEveryone,
+  markMessagesSeen,
   deleteWholeChat,
   blockContact,
   isContactBlocked,
   stopMessagesListener,
   friendlyErr
 } from "./firebase.js";
-
+import { GIPHY_CONFIG } from "./config/config.js";
+// ════════════════════════════════════════════════════════════
+//  STATE
+// ════════════════════════════════════════════════════════════
 let currentUser      = null;
 let currentChatId    = null;
 let currentContactId = null;
@@ -55,15 +62,23 @@ let chatsSeenOnce    = false;
 let lastChatNotifyMap = new Map();
 let ringTimer        = null;
 let ringAudioCtx     = null;
+let renderFrame      = null;
+let seenTimer        = null;
+let giphySearchTimer = null;
+let selectedGif      = null;
 const RTC_CONFIG = {
   iceServers: [
     { urls: "stun:stun.l.google.com:19302" },
     { urls: "stun:stun1.l.google.com:19302" }
   ]
 };
-
+// ════════════════════════════════════════════════════════════
+//  DOM HELPER
+// ════════════════════════════════════════════════════════════
 const $ = id => document.getElementById(id);
-
+// ════════════════════════════════════════════════════════════
+//  ESCAPE HTML — prevent XSS
+// ════════════════════════════════════════════════════════════
 function esc(s) {
   return String(s ?? "")
     .replace(/&/g, "&amp;")
@@ -71,7 +86,9 @@ function esc(s) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
 }
-
+// ════════════════════════════════════════════════════════════
+//  AVATAR HELPERS
+// ════════════════════════════════════════════════════════════
 function initials(name = "") {
   return name.split(" ").map(w => w[0] || "").join("").slice(0, 2).toUpperCase() || "?";
 }
@@ -89,7 +106,9 @@ function avatarStyle(uid) {
   const [c1, c2] = hashColor(uid);
   return `background:linear-gradient(135deg,${c1},${c2})`;
 }
-
+// ════════════════════════════════════════════════════════════
+//  TIME / DATE FORMATTERS
+// ════════════════════════════════════════════════════════════
 function fmtTime(ts) {
   if (!ts) return "";
   const d = ts.toDate ? ts.toDate() : new Date(ts);
@@ -213,7 +232,8 @@ function updateComposerState() {
   const send = $("send-btn");
   const attach = $("attach-btn");
   const camera = $("camera-send-btn");
-  [input, send, attach, camera].forEach(el => {
+  const gif = $("gif-btn");
+  [input, send, attach, camera, gif].forEach(el => {
     if (!el) return;
     el.disabled = blocked;
     el.classList.toggle("disabled", blocked);
@@ -235,10 +255,13 @@ function resetActiveChatUI() {
   $("chat-search-panel")?.classList.remove("show");
   $("message-select-bar")?.classList.remove("show");
   $("chat-menu")?.classList.remove("show");
+  closeGifPicker?.();
   updateComposerState();
   document.querySelectorAll(".chat-item").forEach(el => el.classList.remove("active"));
 }
-
+// ════════════════════════════════════════════════════════════
+//  TOAST
+// ════════════════════════════════════════════════════════════
 window.showToast = function(msg, ms = 3000) {
   const t = $("toast");
   t.textContent = msg;
@@ -297,7 +320,9 @@ function showErr(elId, msg) {
 function clearErr(elId) {
   $(elId).style.display = "none";
 }
-
+// ════════════════════════════════════════════════════════════
+//  AUTH STATE CALLBACK (called from firebase.js)
+// ════════════════════════════════════════════════════════════
 export function onAuthReady(user, isLoggedIn) {
   $("loading-screen").style.display = "none";
   if (isLoggedIn && user) {
@@ -316,7 +341,9 @@ export function onAuthReady(user, isLoggedIn) {
     $("app-screen").style.display  = "none";
   }
 }
-
+// ════════════════════════════════════════════════════════════
+//  INIT APP UI — populate profile & avatar
+// ════════════════════════════════════════════════════════════
 async function initAppUI() {
   const name = currentUser.displayName || "NexUser";
   const photoURL = currentUser.photoURL || "";
@@ -341,7 +368,9 @@ async function initAppUI() {
     console.warn("Could not refresh profile data:", err);
   }
 }
-
+// ════════════════════════════════════════════════════════════
+//  AUTH HANDLERS
+// ════════════════════════════════════════════════════════════
 window.handleLogin = async function(e) {
   e.preventDefault();
   clearErr("login-error");
@@ -395,7 +424,9 @@ window.switchTab = function(tab) {
   clearErr("login-error");
   clearErr("signup-error");
 };
-
+// ════════════════════════════════════════════════════════════
+//  USERS — Render & Filter
+// ════════════════════════════════════════════════════════════
 function renderUserSearchHint(message) {
   const list = $("users-list");
   if (!list) return;
@@ -496,7 +527,9 @@ window.copyMyId = async function() {
     showToast(`Your NexChat ID: ${id}`, 5000);
   }
 };
-
+// ════════════════════════════════════════════════════════════
+//  CHATS — Callback from firebase.js
+// ════════════════════════════════════════════════════════════
 export function onChatsUpdate(chats) {
   allChats = chats;
   allChats.forEach(maybeNotifyChat);
@@ -544,7 +577,9 @@ window.filterChats = function() {
     return name.includes(q);
   }));
 };
-
+// ════════════════════════════════════════════════════════════
+//  OPEN / START CHAT
+// ════════════════════════════════════════════════════════════
 window.startChat = async function(uid, name) {
   if (!uid || !currentUser) return;
   if (uid === currentUser.uid) {
@@ -572,13 +607,13 @@ async function openChat(contactUid, contactName) {
     contactUid,
     contactName
   );
-
+  // Fetch contact data
   const cData = await getUserData(contactUid) || {};
   currentContactData = cData;
   const blockState = await isContactBlocked(currentUser.uid, contactUid).catch(() => ({ iBlocked: false, theyBlocked: false, blocked: false }));
   contactBlocked = !!blockState.blocked;
   const displayName = cData.name || contactName || "NexUser";
-
+  // Update header
   $("chat-h-name").textContent = displayName;
   const statusEl = $("chat-h-status");
   if (userIsOnline(cData)) {
@@ -590,23 +625,23 @@ async function openChat(contactUid, contactName) {
   }
   const hav = $("chat-h-av");
   applyAvatar(hav, contactUid, displayName, cData.photoURL, ";width:40px;height:40px;border-radius:12px;font-size:15px");
-
+  // Show active chat view
   $("chat-empty").style.display  = "none";
   $("active-chat").style.display = "flex";
-
+  // Watch contact's live status
   watchContactStatus(contactUid, data => {
     if (currentContactId !== contactUid) return;
     const live = userIsOnline(data);
     statusEl.textContent = live ? "online" : "last seen " + fmtLastSeen(data.lastSeen || data.lastActive);
     statusEl.className   = "chat-h-status" + (live ? " online" : "");
   });
-
+  // Highlight in sidebar
   document.querySelectorAll(".chat-item").forEach(el => el.classList.remove("active"));
   const ci = $("ci-" + currentChatId);
   if (ci) ci.classList.add("active");
-
+  // Mobile: show chat area
   if (window.innerWidth <= 720) $("chat-area").classList.add("mobile-active");
-
+  // Reset chat tools
   chatSearchQuery = "";
   selectionMode = false;
   selectedMessageIds.clear();
@@ -614,24 +649,65 @@ async function openChat(contactUid, contactName) {
   if ($("chat-search-input")) $("chat-search-input").value = "";
   updateSelectionToolbar();
   updateComposerState();
-
+  // Start listening to messages
   startMessagesListener(currentChatId);
 }
 
+// ════════════════════════════════════════════════════════════
+//  MESSAGES — Callback from firebase.js
+// ════════════════════════════════════════════════════════════
 export function onMessagesUpdate(msgs) {
   currentMessages = Array.isArray(msgs) ? msgs : [];
-  renderMessages();
+  scheduleSeenMark();
+  scheduleRenderMessages();
 }
+
+function scheduleRenderMessages() {
+  if (renderFrame) cancelAnimationFrame(renderFrame);
+  renderFrame = requestAnimationFrame(() => {
+    renderFrame = null;
+    renderMessages();
+  });
+}
+
+function visibleMessages() {
+  return currentMessages.filter(msg => !(Array.isArray(msg.deletedFor) && msg.deletedFor.includes(currentUser?.uid)));
+}
+
+function messageSeenByContact(msg) {
+  return !!currentContactId && Array.isArray(msg.seenBy) && msg.seenBy.includes(currentContactId);
+}
+
+function scheduleSeenMark() {
+  if (seenTimer) clearTimeout(seenTimer);
+  seenTimer = setTimeout(async () => {
+    if (!currentChatId || !currentUser || document.hidden) return;
+    const ids = currentMessages
+      .filter(msg => msg.senderId !== currentUser.uid)
+      .filter(msg => !(Array.isArray(msg.deletedFor) && msg.deletedFor.includes(currentUser.uid)))
+      .filter(msg => !(Array.isArray(msg.seenBy) && msg.seenBy.includes(currentUser.uid)))
+      .map(msg => msg.id)
+      .filter(Boolean);
+    if (!ids.length) return;
+    await markMessagesSeen(currentChatId, currentUser.uid, ids);
+  }, 350);
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") scheduleSeenMark();
+});
 
 function renderMessages() {
   const area = $("messages-area");
   if (!area) return;
+  const shouldStick = area.scrollHeight - area.scrollTop - area.clientHeight < 180;
   area.innerHTML = "";
 
   const q = String(chatSearchQuery || "").trim();
+  const baseMsgs = visibleMessages();
   const displayMsgs = q
-    ? currentMessages.filter(msg => messageMatchesSearch(msg, q))
-    : currentMessages;
+    ? baseMsgs.filter(msg => messageMatchesSearch(msg, q))
+    : baseMsgs;
 
   if (q) {
     const note = document.createElement("div");
@@ -659,10 +735,10 @@ function renderMessages() {
       : '<div class="date-sep"><span>Send your first message ⚡</span></div>';
   }
 
-  
+  // Restore typing indicator at bottom
   const tb = $("typing-bubble");
   if (tb) area.appendChild(tb);
-  area.scrollTop = area.scrollHeight;
+  if (shouldStick || !q) area.scrollTop = area.scrollHeight;
 }
 
 function updateSelectionToolbar() {
@@ -672,7 +748,9 @@ function updateSelectionToolbar() {
   const count = selectedMessageIds.size;
   if ($("selected-count")) $("selected-count").textContent = `${count} selected`;
   const btn = $("delete-selected-btn");
+  const btnAll = $("delete-everyone-btn");
   if (btn) btn.disabled = count === 0;
+  if (btnAll) btnAll.disabled = count === 0;
 }
 
 window.toggleSelectMode = function(force) {
@@ -692,20 +770,44 @@ window.toggleMessageSelection = function(messageId) {
   updateSelectionToolbar();
 };
 
-window.deleteSelectedMessages = async function() {
-  if (!currentChatId || selectedMessageIds.size === 0) return;
-  if (!confirm(`Delete ${selectedMessageIds.size} selected message(s)?`)) return;
+async function finishDeleteSelection(action) {
+  selectedMessageIds.clear();
+  selectionMode = false;
+  updateSelectionToolbar();
+  scheduleRenderMessages();
+  showToast(action === "everyone" ? "Deleted for everyone ✅" : "Deleted for you ✅");
+}
+
+window.deleteSelectedForMe = async function() {
+  if (!currentChatId || selectedMessageIds.size === 0 || !currentUser) return;
+  if (!confirm(`Delete ${selectedMessageIds.size} selected message(s) only for you?`)) return;
   try {
-    await deleteMessages(currentChatId, [...selectedMessageIds]);
-    selectedMessageIds.clear();
-    selectionMode = false;
-    updateSelectionToolbar();
-    showToast("Selected message(s) deleted ✅");
+    await deleteMessagesForMe(currentChatId, currentUser.uid, [...selectedMessageIds]);
+    await finishDeleteSelection("me");
   } catch (err) {
-    console.error("Delete messages error:", err);
-    showToast("Could not delete messages. Deploy updated Firestore rules.");
+    console.error("Delete for me error:", err);
+    showToast("Could not delete for you. Deploy updated Firestore rules.");
   }
 };
+
+window.deleteSelectedForEveryone = async function() {
+  if (!currentChatId || selectedMessageIds.size === 0) return;
+  const chosen = currentMessages.filter(m => selectedMessageIds.has(m.id));
+  const hasOtherMessages = chosen.some(m => m.senderId !== currentUser?.uid);
+  const msg = hasOtherMessages
+    ? "Some selected messages were sent by the other user. Delete selected messages for everyone?"
+    : `Delete ${selectedMessageIds.size} selected message(s) for everyone?`;
+  if (!confirm(msg)) return;
+  try {
+    await deleteMessagesForEveryone(currentChatId, [...selectedMessageIds]);
+    await finishDeleteSelection("everyone");
+  } catch (err) {
+    console.error("Delete for everyone error:", err);
+    showToast("Could not delete for everyone. Deploy updated Firestore rules.");
+  }
+};
+
+window.deleteSelectedMessages = window.deleteSelectedForMe;
 
 window.toggleChatSearch = function() {
   const panel = $("chat-search-panel");
@@ -772,7 +874,7 @@ window.blockCurrentContact = async function() {
   }
 };
 
-
+// Close menu on outside click
 document.addEventListener("click", e => {
   if (!e.target.closest?.("#chat-menu") && !e.target.closest?.("#chat-menu-btn")) {
     $("chat-menu")?.classList.remove("show");
@@ -782,7 +884,7 @@ document.addEventListener("click", e => {
 function buildAttachment(msg) {
   if (!msg.fileUrl) return "";
   const href = safeLink(msg.fileUrl);
-  const name = esc(msg.fileName || "Attachment");
+  const name = esc(msg.fileName || msg.gifTitle || "Attachment");
   const size = esc(formatFileSize(msg.fileSize));
   const type = String(msg.fileType || "");
   const downloadUrl = esc(cloudinaryDownloadUrl(msg.fileUrl, msg.fileName || "nexchat-file"));
@@ -790,6 +892,15 @@ function buildAttachment(msg) {
     <button class="msg-download-btn" type="button" data-download-url="${downloadUrl || href}" data-download-name="${name}" title="Download">
       <i class="fa-solid fa-download"></i> Download
     </button>`;
+
+  if (msg.type === "gif") {
+    return `
+      <a class="msg-image-link gif-link" href="${href}" target="_blank" rel="noopener noreferrer" title="Open GIF">
+        <img class="msg-image msg-gif" src="${href}" alt="${name}" loading="lazy"/>
+      </a>
+      <div class="msg-file-name"><i class="fa-solid fa-film"></i> GIF${msg.gifTitle ? ` · ${esc(msg.gifTitle)}` : ""}</div>
+      <div class="msg-media-actions">${downloadBtn}</div>`;
+  }
 
   if (msg.type === "image" || type.startsWith("image/")) {
     return `
@@ -812,6 +923,7 @@ function buildAttachment(msg) {
 }
 function buildBubble(msg) {
   const isOut = msg.senderId === currentUser.uid;
+  const seen = isOut && messageSeenByContact(msg);
   const wrap  = document.createElement("div");
   const text  = String(msg.text || "");
   const attachment = buildAttachment(msg);
@@ -828,7 +940,7 @@ function buildBubble(msg) {
       ${text ? `<div class="bubble-text">${highlightEsc(text, chatSearchQuery)}</div>` : ""}
       <div class="bubble-meta">
         <span class="b-time">${fmtTime(msg.timestamp)}</span>
-        ${isOut ? '<span class="b-ticks"><i class="fa-solid fa-check-double"></i></span>' : ""}
+        ${isOut ? `<span class="b-ticks${seen ? " seen" : ""}" title="${seen ? "Seen" : "Sent"}"><i class="fa-solid fa-check-double"></i><small>${seen ? "Seen" : "Sent"}</small></span>` : ""}
       </div>
     </div>`;
   wrap.addEventListener("click", e => {
@@ -868,6 +980,100 @@ window.downloadAttachment = async function(url, name = "nexchat-file") {
   }
 };
 
+// ════════════════════════════════════════════════════════════
+//  GIPHY GIF PICKER
+// ════════════════════════════════════════════════════════════
+function giphyConfigured() {
+  return GIPHY_CONFIG?.apiKey && !String(GIPHY_CONFIG.apiKey).includes("YOUR_");
+}
+
+function renderGifResults(items = []) {
+  const grid = $("gif-results");
+  if (!grid) return;
+  if (!items.length) {
+    grid.innerHTML = '<div class="gif-empty">No GIFs found.</div>';
+    return;
+  }
+  grid.innerHTML = "";
+  items.forEach(gif => {
+    const image = gif.images?.fixed_width?.url || gif.images?.downsized_medium?.url || gif.images?.original?.url || "";
+    if (!image) return;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "gif-card";
+    btn.innerHTML = `<img src="${esc(image)}" alt="${esc(gif.title || "GIF")}" loading="lazy"/>`;
+    btn.addEventListener("click", () => sendSelectedGif({
+      id: gif.id || "",
+      title: gif.title || "GIF",
+      url: image
+    }));
+    grid.appendChild(btn);
+  });
+}
+
+async function loadGifs(queryText = "") {
+  const grid = $("gif-results");
+  if (!grid) return;
+  if (!giphyConfigured()) {
+    grid.innerHTML = '<div class="gif-empty">Add your GIPHY API key in config/config.js first.</div>';
+    return;
+  }
+  grid.innerHTML = '<div class="spinner"></div>';
+  const params = new URLSearchParams({
+    api_key: GIPHY_CONFIG.apiKey,
+    limit: String(GIPHY_CONFIG.limit || 16),
+    rating: GIPHY_CONFIG.rating || "g"
+  });
+  const endpoint = queryText.trim()
+    ? `https://api.giphy.com/v1/gifs/search?${params}&q=${encodeURIComponent(queryText.trim())}`
+    : `https://api.giphy.com/v1/gifs/trending?${params}`;
+  try {
+    const res = await fetch(endpoint);
+    const data = await res.json();
+    renderGifResults(Array.isArray(data.data) ? data.data : []);
+  } catch (err) {
+    console.error("GIPHY error:", err);
+    grid.innerHTML = '<div class="gif-empty">Could not load GIFs. Check your API key or internet.</div>';
+  }
+}
+
+window.openGifPicker = function() {
+  if (contactBlocked) { showToast("You blocked this contact. GIF sharing is disabled."); return; }
+  if (!currentChatId) { showToast("Open a chat before sending GIFs."); return; }
+  $("gif-modal")?.classList.add("show");
+  $("gif-search-input")?.focus();
+  loadGifs($("gif-search-input")?.value || "");
+};
+
+window.closeGifPicker = function() {
+  $("gif-modal")?.classList.remove("show");
+};
+
+window.searchGifs = function() {
+  if (giphySearchTimer) clearTimeout(giphySearchTimer);
+  const q = $("gif-search-input")?.value || "";
+  giphySearchTimer = setTimeout(() => loadGifs(q), 350);
+};
+
+window.sendSelectedGif = async function(gif) {
+  if (!currentChatId || !currentUser || !gif?.url) return;
+  const btn = $("gif-btn");
+  btn?.setAttribute("disabled", "true");
+  try {
+    await sendGifMsg(currentChatId, currentUser.uid, currentUser.displayName || "NexUser", gif);
+    closeGifPicker();
+    showToast("GIF sent ✅");
+  } catch (err) {
+    console.error("Send GIF error:", err);
+    showToast("Could not send GIF. Deploy updated Firestore rules.");
+  } finally {
+    btn?.removeAttribute("disabled");
+  }
+};
+
+// ════════════════════════════════════════════════════════════
+//  SEND MESSAGE
+// ════════════════════════════════════════════════════════════
 window.sendMessage = async function() {
   const inp  = $("message-input");
   const text = inp.value.trim();
@@ -936,7 +1142,9 @@ window.autoGrow = function(el) {
   el.style.height = "auto";
   el.style.height = Math.min(el.scrollHeight, 120) + "px";
 };
-
+// ════════════════════════════════════════════════════════════
+//  CAMERA PHOTO CAPTURE
+// ════════════════════════════════════════════════════════════
 function stopCameraStream() {
   if (cameraStream) {
     cameraStream.getTracks().forEach(track => track.stop());
@@ -1002,6 +1210,9 @@ window.captureCameraPhoto = async function() {
   }, "image/jpeg", 0.9);
 };
 
+// ════════════════════════════════════════════════════════════
+//  PROFILE PHOTOS + USER PROFILE VIEW
+// ════════════════════════════════════════════════════════════
 window.chooseProfilePhoto = function() {
   $("profile-photo-input")?.click();
 };
@@ -1058,6 +1269,9 @@ window.closeUserProfile = function() {
   $("user-profile-modal")?.classList.remove("show");
 };
 
+// ════════════════════════════════════════════════════════════
+//  PANEL TOGGLES
+// ════════════════════════════════════════════════════════════
 window.toggleProfile = function() {
   $("profile-panel").classList.toggle("open");
 };
@@ -1076,6 +1290,9 @@ window.closeMobileChat = function() {
   $("chat-area").classList.remove("mobile-active");
 };
 
+// ════════════════════════════════════════════════════════════
+//  AUDIO / VIDEO CALLING — WebRTC + Firestore signaling
+// ════════════════════════════════════════════════════════════
 function showIncomingCall(call) {
   incomingCallData = call;
   const modal = $("incoming-call");
