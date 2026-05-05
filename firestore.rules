@@ -117,14 +117,15 @@ service cloud.firestore {
         && request.auth.uid in request.resource.data.members
         && request.resource.data.members is list
         && request.resource.data.members.size() == 2
-        && request.resource.data.keys().hasOnly(['members','memberNames','lastMessage','lastMessageTime','lastSenderId','lastSenderName','createdAt'])
+        && request.resource.data.keys().hasOnly(['members','memberNames','memberPhotos','lastMessage','lastMessageTime','lastSenderId','lastSenderName','createdAt'])
         && request.resource.data.keys().hasAll(['members','memberNames','lastMessage','lastMessageTime'])
         && request.resource.data.lastMessage is string;
 
       allow update: if isChatMember(chatId)
         && request.resource.data.members == resource.data.members
         && request.resource.data.memberNames is map
-        && request.resource.data.keys().hasOnly(['members','memberNames','lastMessage','lastMessageTime','lastSenderId','lastSenderName','createdAt'])
+        && (!request.resource.data.keys().hasAny(['memberPhotos']) || request.resource.data.memberPhotos is map)
+        && request.resource.data.keys().hasOnly(['members','memberNames','memberPhotos','lastMessage','lastMessageTime','lastSenderId','lastSenderName','createdAt'])
         && request.resource.data.lastMessage is string;
 
       allow delete: if isChatMember(chatId);

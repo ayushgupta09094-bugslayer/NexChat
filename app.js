@@ -11,6 +11,7 @@ import {
   watchContactStatus,
   findUserByPublicId,
   searchUsersByQuery,
+  updateUserProfilePhoto,
   updateUserDisplayName,
   startIncomingCallsListener,
   stopIncomingCallsListener,
@@ -66,6 +67,13 @@ let renderFrame      = null;
 let seenTimer        = null;
 let giphySearchTimer = null;
 let selectedGif      = null;
+let signupProfilePhotoFile = null;
+let profileCropTarget = null;
+let profileCropImage = null;
+let profileCropScale = 1;
+let profileCropOffset = { x: 0, y: 0 };
+let profileCropDrag = null;
+let chatSearchTimer = null;
 let contactCache     = new Map();
 let chatRenderVersion = 0;
 const RTC_CONFIG = {
@@ -161,7 +169,17 @@ function rawSafeUrl(url = "") {
   return /^https:\/\//i.test(u) ? u : "";
 }
 function userPhotoURL(userOrUrl = "") {
-  return "";
+  if (!userOrUrl) return "";
+  if (typeof userOrUrl === "string") return rawSafeUrl(userOrUrl);
+  const candidates = [
+    userOrUrl.photoURL,
+    userOrUrl.profilePhotoURL,
+    userOrUrl.profilePhoto,
+    userOrUrl.profilePic,
+    userOrUrl.avatarUrl,
+    userOrUrl.avatarURL
+  ];
+  return rawSafeUrl(candidates.find(Boolean) || "");
 }
 function cloudinaryDownloadUrl(url = "", name = "nexchat-file") {
   const raw = rawSafeUrl(url);
@@ -174,16 +192,18 @@ function cloudinaryDownloadUrl(url = "", name = "nexchat-file") {
   return raw.replace("/upload/", `/upload/fl_attachment:${encodeURIComponent(baseName)}/`);
 }
 function avatarHTML(name = "", photoURL = "") {
-  return esc(initials(name));
+  const url = rawSafeUrl(photoURL);
+  return url ? `<img src="${esc(url)}" alt="${esc(name || "Profile picture")}" loading="lazy"/>` : esc(initials(name));
 }
 function avatarClass(photoURL = "") {
-  return "";
+  return rawSafeUrl(photoURL) ? " has-photo" : "";
 }
 function applyAvatar(el, uid, name, photoURL, extraCss = "") {
   if (!el) return;
-  el.classList.remove("has-photo");
-  el.style.cssText = avatarStyle(uid) + extraCss;
-  el.innerHTML = avatarHTML(name);
+  const url = rawSafeUrl(photoURL);
+  el.classList.toggle("has-photo", !!url);
+  el.style.cssText = (url ? "" : avatarStyle(uid)) + extraCss;
+  el.innerHTML = avatarHTML(name, url);
 }
 function publicUserId(user = {}) {
   const uid = String(user.uid || user.id || "");
@@ -303,6 +323,28 @@ function resetActiveChatUI() {
   updateComposerState();
   document.querySelectorAll(".chat-item").forEach(el => el.classList.remove("active"));
 }
+// ════════════════════════════════════════════════════════════
+//  THEME — dark / light toggle
+// ════════════════════════════════════════════════════════════
+function applyTheme(theme = "dark") {
+  const clean = theme === "light" ? "light" : "dark";
+  document.documentElement.dataset.theme = clean;
+  localStorage.setItem("nexchat-theme", clean);
+  const icon = $("theme-toggle-icon");
+  const btn = $("theme-toggle-btn");
+  if (icon) icon.className = clean === "light" ? "fa-solid fa-moon" : "fa-solid fa-sun";
+  if (btn) btn.title = clean === "light" ? "Switch to dark mode" : "Switch to light mode";
+}
+function initTheme() {
+  const saved = localStorage.getItem("nexchat-theme");
+  const preferred = window.matchMedia?.("(prefers-color-scheme: light)")?.matches ? "light" : "dark";
+  applyTheme(saved || preferred);
+}
+window.toggleTheme = function() {
+  applyTheme(document.documentElement.dataset.theme === "light" ? "dark" : "light");
+};
+initTheme();
+
 // ════════════════════════════════════════════════════════════
 //  TOAST
 // ════════════════════════════════════════════════════════════
@@ -447,7 +489,9 @@ window.handleSignup = async function(e) {
   btn.disabled   = true;
   btn.textContent = "Creating account…";
   try {
-    await signUp(name, email, pass);
+    await signUp(name, email, pass, signupProfilePhotoFile);
+    signupProfilePhotoFile = null;
+    updateSignupPhotoPreview(null);
     showToast(`Welcome to NexChat, ${name}! 🎉⚡`);
   } catch (err) {
     showErr("signup-error", friendlyErr(err.code));
@@ -590,7 +634,7 @@ function chatContactSummary(chat) {
   const cached = otherId ? contactCache.get(otherId) : null;
   const fallback = isRealDisplayName(memberName) ? memberName : "NexUser";
   const name = displayUserName(cached || { name: memberName }, fallback);
-  const photoURL = userPhotoURL(cached || {});
+  const photoURL = userPhotoURL(cached || {}) || userPhotoURL(chat.memberPhotos?.[otherId] || "");
   return { otherId, name, photoURL, cached };
 }
 
@@ -787,7 +831,6 @@ function renderMessages() {
   const area = $("messages-area");
   if (!area) return;
   const shouldStick = area.scrollHeight - area.scrollTop - area.clientHeight < 180;
-  area.innerHTML = "";
 
   const q = String(chatSearchQuery || "").trim();
   const baseMsgs = visibleMessages();
@@ -795,34 +838,37 @@ function renderMessages() {
     ? baseMsgs.filter(msg => messageMatchesSearch(msg, q))
     : baseMsgs;
 
+  const frag = document.createDocumentFragment();
+
   if (q) {
     const note = document.createElement("div");
     note.className = "search-result-note";
     note.innerHTML = `<i class="fa-solid fa-magnifying-glass"></i> ${displayMsgs.length} result${displayMsgs.length === 1 ? "" : "s"} for <strong>${esc(q)}</strong>`;
-    area.appendChild(note);
+    frag.appendChild(note);
   }
 
   let lastDateLabel = "";
-  displayMsgs.forEach(msg => {
+  for (const msg of displayMsgs) {
     const dLabel = fmtDateLabel(msg.timestamp);
     if (dLabel !== lastDateLabel) {
       lastDateLabel = dLabel;
       const sep = document.createElement("div");
       sep.className = "date-sep";
       sep.innerHTML = `<span>${dLabel}</span>`;
-      area.appendChild(sep);
+      frag.appendChild(sep);
     }
-    area.appendChild(buildBubble(msg));
-  });
-
-  if (!displayMsgs.length) {
-    area.innerHTML += q
-      ? '<div class="date-sep"><span>No matching message found</span></div>'
-      : '<div class="date-sep"><span>Send your first message ⚡</span></div>';
+    frag.appendChild(buildBubble(msg));
   }
 
-  // Restore typing indicator at bottom
+  if (!displayMsgs.length) {
+    const sep = document.createElement("div");
+    sep.className = "date-sep";
+    sep.innerHTML = q ? '<span>No matching message found</span>' : '<span>Send your first message ⚡</span>';
+    frag.appendChild(sep);
+  }
+
   const tb = $("typing-bubble");
+  area.replaceChildren(frag);
   if (tb) area.appendChild(tb);
   if (shouldStick || !q) area.scrollTop = area.scrollHeight;
 }
@@ -912,7 +958,8 @@ window.toggleChatSearch = function() {
 
 window.filterCurrentChatMessages = function() {
   chatSearchQuery = $("chat-search-input")?.value || "";
-  renderMessages();
+  if (chatSearchTimer) clearTimeout(chatSearchTimer);
+  chatSearchTimer = setTimeout(() => scheduleRenderMessages(), 120);
 };
 
 window.clearChatSearch = function() {
@@ -1297,10 +1344,158 @@ window.captureCameraPhoto = async function() {
 };
 
 // ════════════════════════════════════════════════════════════
+//  PROFILE PHOTO — crop/adjust and upload
+// ════════════════════════════════════════════════════════════
+function updateSignupPhotoPreview(fileOrUrl) {
+  const box = $("signup-photo-preview");
+  const txt = $("signup-photo-text");
+  if (!box || !txt) return;
+  if (!fileOrUrl) {
+    box.innerHTML = '<i class="fa-solid fa-camera"></i>';
+    box.classList.remove("has-photo");
+    txt.textContent = "Add profile picture";
+    return;
+  }
+  const url = typeof fileOrUrl === "string" ? fileOrUrl : URL.createObjectURL(fileOrUrl);
+  box.innerHTML = `<img src="${esc(url)}" alt="Profile preview"/>`;
+  box.classList.add("has-photo");
+  txt.textContent = "Change profile picture";
+}
+function profilePhotoInput(target = "profile") {
+  profileCropTarget = target;
+  const input = target === "signup" ? $("signup-photo-input") : $("profile-photo-input");
+  if (!input) return;
+  input.value = "";
+  input.click();
+}
+window.chooseProfilePhoto = () => profilePhotoInput("profile");
+window.chooseSignupProfilePhoto = () => profilePhotoInput("signup");
+window.handleProfilePhotoPick = e => openProfileCrop(e.target.files?.[0], "profile");
+window.handleSignupProfilePhotoPick = e => openProfileCrop(e.target.files?.[0], "signup");
+function openProfileCrop(file, target = "profile") {
+  if (!file) return;
+  if (!file.type?.startsWith("image/")) {
+    showToast("Please choose an image file.");
+    return;
+  }
+  if (file.size > 8 * 1024 * 1024) {
+    showToast("Profile picture must be under 8 MB.");
+    return;
+  }
+  profileCropTarget = target;
+  const img = new Image();
+  img.onload = () => {
+    profileCropImage = img;
+    profileCropScale = 1;
+    profileCropOffset = { x: 0, y: 0 };
+    const slider = $("profile-crop-zoom");
+    if (slider) slider.value = "1";
+    $("profile-crop-modal")?.classList.add("show");
+    drawProfileCrop();
+  };
+  img.onerror = () => showToast("Could not read this image.");
+  img.src = URL.createObjectURL(file);
+}
+function drawProfileCrop() {
+  const canvas = $("profile-crop-canvas");
+  const img = profileCropImage;
+  if (!canvas || !img) return;
+  const ctx = canvas.getContext("2d");
+  const size = canvas.width = canvas.height = 320;
+  ctx.clearRect(0, 0, size, size);
+  ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue("--bg-input") || "#111";
+  ctx.fillRect(0, 0, size, size);
+  const base = Math.max(size / img.width, size / img.height);
+  const scale = base * profileCropScale;
+  const w = img.width * scale;
+  const h = img.height * scale;
+  const x = (size - w) / 2 + profileCropOffset.x;
+  const y = (size - h) / 2 + profileCropOffset.y;
+  ctx.drawImage(img, x, y, w, h);
+  ctx.strokeStyle = "rgba(255,215,0,.9)";
+  ctx.lineWidth = 3;
+  ctx.strokeRect(2, 2, size - 4, size - 4);
+}
+window.updateProfileCropZoom = function(value) {
+  profileCropScale = Number(value) || 1;
+  drawProfileCrop();
+};
+function bindCropCanvasDrag() {
+  const canvas = $("profile-crop-canvas");
+  if (!canvas || canvas.dataset.bound === "1") return;
+  canvas.dataset.bound = "1";
+  const point = e => {
+    const t = e.touches?.[0] || e;
+    return { x: t.clientX, y: t.clientY };
+  };
+  const start = e => {
+    e.preventDefault();
+    const p = point(e);
+    profileCropDrag = { x: p.x, y: p.y, ox: profileCropOffset.x, oy: profileCropOffset.y };
+  };
+  const move = e => {
+    if (!profileCropDrag) return;
+    e.preventDefault();
+    const p = point(e);
+    profileCropOffset.x = profileCropDrag.ox + (p.x - profileCropDrag.x);
+    profileCropOffset.y = profileCropDrag.oy + (p.y - profileCropDrag.y);
+    drawProfileCrop();
+  };
+  const end = () => { profileCropDrag = null; };
+  canvas.addEventListener("mousedown", start);
+  window.addEventListener("mousemove", move);
+  window.addEventListener("mouseup", end);
+  canvas.addEventListener("touchstart", start, { passive: false });
+  window.addEventListener("touchmove", move, { passive: false });
+  window.addEventListener("touchend", end);
+}
+window.closeProfileCrop = function() {
+  $("profile-crop-modal")?.classList.remove("show");
+  profileCropImage = null;
+  profileCropDrag = null;
+};
+function canvasToBlob(canvas, type = "image/jpeg", quality = 0.88) {
+  return new Promise(resolve => canvas.toBlob(resolve, type, quality));
+}
+window.saveProfileCrop = async function() {
+  const canvas = $("profile-crop-canvas");
+  if (!canvas || !profileCropImage) return;
+  const out = document.createElement("canvas");
+  out.width = out.height = 512;
+  out.getContext("2d").drawImage(canvas, 0, 0, 512, 512);
+  const blob = await canvasToBlob(out);
+  if (!blob) return showToast("Could not prepare profile picture.");
+  const file = new File([blob], "profile-picture.jpg", { type: "image/jpeg" });
+  if (profileCropTarget === "signup") {
+    signupProfilePhotoFile = file;
+    updateSignupPhotoPreview(file);
+    closeProfileCrop();
+    showToast("Profile picture ready for signup ✅");
+    return;
+  }
+  if (!currentUser) return;
+  const saveBtn = $("profile-crop-save-btn");
+  if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = "Saving…"; }
+  try {
+    const updated = await updateUserProfilePhoto(currentUser.uid, file);
+    const name = $("profile-disp-name")?.textContent || currentUser.displayName || currentUser.email || "NexUser";
+    applyAvatar($("profile-av-big"), currentUser.uid, name, updated.photoURL);
+    rememberContact({ ...(updated || {}), id: currentUser.uid, uid: currentUser.uid, email: currentUser.email });
+    renderChatsList(allChats);
+    closeProfileCrop();
+    showToast("Profile picture updated ✅");
+  } catch (err) {
+    console.error("Profile photo update error:", err);
+    showToast(err?.message || "Could not update profile picture.", 5000);
+  } finally {
+    if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = "Save profile photo"; }
+  }
+};
+setTimeout(bindCropCanvasDrag, 0);
+
+// ════════════════════════════════════════════════════════════
 //  USER PROFILE VIEW
 // ════════════════════════════════════════════════════════════
-window.chooseProfilePhoto = function() {};
-window.handleProfilePhotoSelect = function() {};
 window.showUserProfile = async function(uid = currentContactId) {
   if (!uid) return;
   try {
@@ -1313,7 +1508,7 @@ window.showUserProfile = async function(uid = currentContactId) {
     const name = displayUserName(fullUser);
     const modal = $("user-profile-modal");
     if (!modal) return;
-    applyAvatar($("view-profile-av"), uid, name, "", ";width:96px;height:96px;border-radius:28px;font-size:28px");
+    applyAvatar($("view-profile-av"), uid, name, userPhotoURL(fullUser), ";width:96px;height:96px;border-radius:28px;font-size:28px");
     $("view-profile-name").textContent = name;
     $("view-profile-email").textContent = fullUser.email || "";
     $("view-profile-id").textContent = publicUserId({ ...fullUser, uid });
@@ -1368,7 +1563,8 @@ window.handleUsernameUpdate = async function(e) {
     currentUser.displayName = newName;
     $("profile-disp-name").textContent = newName;
     rememberContact({ id: currentUser.uid, uid: currentUser.uid, name: newName, email: currentUser.email });
-    applyAvatar($("profile-av-big"), currentUser.uid, newName, "");
+    const fresh = await getUserData(currentUser.uid).catch(() => null);
+    applyAvatar($("profile-av-big"), currentUser.uid, newName, userPhotoURL(fresh || currentUser));
     cancelUsernameEdit();
     showToast("Username updated ✅");
   } catch (err) {

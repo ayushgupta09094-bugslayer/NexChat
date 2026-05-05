@@ -1,9 +1,3 @@
-// ============================================================
-//  NexChat Firebase Configuration
-//  Firebase Web App config values are public identifiers.
-//  Keep Security Rules strict to protect your Firestore data.
-// ============================================================
-
 export const firebaseConfig = {
   apiKey: "AIzaSyB1lJmDxxpTLuzvctNa8IHIOzeY7m0QVCA",
   authDomain: "nexchat-db758.firebaseapp.com",

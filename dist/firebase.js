@@ -225,7 +225,7 @@ async function ensureUserDoc(user) {
 // ════════════════════════════════════════════════════════════
 //  AUTH — SIGN UP
 // ════════════════════════════════════════════════════════════
-export async function signUp(name, email, password) {
+export async function signUp(name, email, password, profileFile = null) {
   const cred = await createUserWithEmailAndPassword(auth, email, password);
 
   await updateProfile(cred.user, { displayName: name });
@@ -240,6 +240,9 @@ export async function signUp(name, email, password) {
   };
   await setDoc(doc(db, COLLECTIONS.USERS, cred.user.uid), userData, { merge: true });
   await upsertUserLookup(cred.user, userData);
+  if (profileFile) {
+    await updateUserProfilePhoto(cred.user.uid, profileFile);
+  }
   return cred.user;
 }
 
@@ -252,7 +255,51 @@ export async function signIn(email, password) {
 }
 
 export async function updateUserProfilePhoto(uid, file) {
-  throw new Error("Profile picture feature has been removed.");
+  if (!uid || !auth.currentUser || auth.currentUser.uid !== uid) {
+    throw new Error("You can only update your own profile picture.");
+  }
+  if (!file) throw new Error("No profile picture selected.");
+  if (!String(file.type || "").startsWith("image/")) throw new Error("Please choose an image file.");
+  if (file.size > 8 * 1024 * 1024) throw new Error("Profile picture must be under 8 MB.");
+
+  const uploaded = await uploadToCloudinary(file, `${uid}/profile`, "profile-picture.jpg", "nexchat,profile-photo");
+  await updateProfile(auth.currentUser, { photoURL: uploaded.url });
+
+  const userRef = doc(db, COLLECTIONS.USERS, uid);
+  const snap = await getDoc(userRef);
+  const old = snap.exists() ? (snap.data() || {}) : {};
+  const profile = publicProfileFields(auth.currentUser, {
+    name: bestStoredName({ ...old, displayName: auth.currentUser.displayName, email: old.email || auth.currentUser.email }),
+    email: old.email || auth.currentUser.email || "",
+    nexId: old.nexId || makeNexId(uid),
+    photoURL: uploaded.url,
+    photoPublicId: uploaded.publicId
+  });
+
+  await setDoc(userRef, {
+    ...profile,
+    searchTokens: makeSearchTokens(profile),
+    updatedAt: serverTimestamp()
+  }, { merge: true });
+
+  await upsertUserLookup(auth.currentUser, profile);
+
+  // Keep existing chat list avatars in sync where rules allow it.
+  try {
+    const chatsSnap = await getDocs(query(collection(db, COLLECTIONS.CHATS), where("members", "array-contains", uid)));
+    const updates = [];
+    chatsSnap.forEach(chatDoc => {
+      const chat = chatDoc.data() || {};
+      updates.push(setDoc(doc(db, COLLECTIONS.CHATS, chatDoc.id), {
+        memberPhotos: { ...(chat.memberPhotos || {}), [uid]: uploaded.url }
+      }, { merge: true }));
+    });
+    await Promise.all(updates);
+  } catch (err) {
+    console.warn("Could not sync profile photo into old chats:", err);
+  }
+
+  return { ...profile, photoURL: uploaded.url, photoPublicId: uploaded.publicId };
 }
 
 export async function updateUserDisplayName(uid, newName) {
@@ -540,6 +587,17 @@ async function bestNameForUid(uid, providedName = "") {
   }
   return isRealName(providedName) ? String(providedName).trim() : "NexUser";
 }
+async function bestPhotoForUid(uid) {
+  try {
+    const snap = await getDoc(doc(db, COLLECTIONS.USERS, uid));
+    if (!snap.exists()) return "";
+    const data = snap.data() || {};
+    return data.photoURL || data.profilePhotoURL || data.profilePhoto || data.profilePic || "";
+  } catch (err) {
+    console.warn("Could not read user photo for chat:", err);
+    return "";
+  }
+}
 
 export async function getOrCreateChat(myUid, myName, contactUid, contactName) {
   if (!myUid || !contactUid) throw new Error("Missing user id for chat.");
@@ -550,15 +608,18 @@ export async function getOrCreateChat(myUid, myName, contactUid, contactName) {
   const myBestName = await bestNameForUid(myUid, myName);
   const contactBestName = await bestNameForUid(contactUid, contactName);
   const memberNames = { [myUid]: myBestName, [contactUid]: contactBestName };
+  const memberPhotos = { [myUid]: await bestPhotoForUid(myUid), [contactUid]: await bestPhotoForUid(contactUid) };
 
   try {
     const snap = await getDoc(chatRef);
     if (snap.exists()) {
       const old = snap.data() || {};
       const oldNames = old.memberNames || {};
+      const oldPhotos = old.memberPhotos || {};
       const needsNameFix = !isRealName(oldNames[myUid]) || !isRealName(oldNames[contactUid]) || oldNames[myUid] !== myBestName || oldNames[contactUid] !== contactBestName;
-      if (needsNameFix) {
-        await setDoc(chatRef, { memberNames: { ...oldNames, ...memberNames } }, { merge: true });
+      const needsPhotoFix = (memberPhotos[myUid] && oldPhotos[myUid] !== memberPhotos[myUid]) || (memberPhotos[contactUid] && oldPhotos[contactUid] !== memberPhotos[contactUid]);
+      if (needsNameFix || needsPhotoFix) {
+        await setDoc(chatRef, { memberNames: { ...oldNames, ...memberNames }, memberPhotos: { ...oldPhotos, ...memberPhotos } }, { merge: true });
       }
       return chatId;
     }
@@ -570,6 +631,7 @@ export async function getOrCreateChat(myUid, myName, contactUid, contactName) {
   await setDoc(chatRef, {
     members:         [myUid, contactUid],
     memberNames,
+    memberPhotos,
     lastMessage:     "",
     lastMessageTime: serverTimestamp(),
     lastSenderId:    "",
