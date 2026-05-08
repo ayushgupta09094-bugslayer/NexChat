@@ -24,7 +24,8 @@ import {
   deleteDoc,
   where,
   limit,
-  arrayUnion
+  arrayUnion,
+  writeBatch
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import { firebaseConfig, COLLECTIONS, CLOUDINARY_CONFIG } from "./config/config.js";
 import {
@@ -32,13 +33,9 @@ import {
   onChatsUpdate,
   onMessagesUpdate
 } from "./app.js";
-
-// ── Initialize Firebase ──────────────────────────────────────
 const fbApp   = initializeApp(firebaseConfig);
 const auth    = getAuth(fbApp);
 const db      = getFirestore(fbApp);
-
-// ── Internal State ───────────────────────────────────────────
 let unsubMessages    = null;
 let unsubChats       = null;
 let unsubStatus      = null;
@@ -47,10 +44,23 @@ let unsubIncomingCalls = null;
 let presenceTimer    = null;
 let visibilityBound  = false;
 let activePresenceId = null;
+const userDocCache = new Map();
+const USER_DOC_CACHE_MS = 60000;
 
-// ════════════════════════════════════════════════════════════
-//  AUTH — LISTENER
-// ════════════════════════════════════════════════════════════
+async function getCachedUserDoc(uid, force = false) {
+  if (!uid) return null;
+  const cached = userDocCache.get(uid);
+  if (!force && cached && Date.now() - cached.time < USER_DOC_CACHE_MS) return cached.data;
+  const snap = await getDoc(doc(db, COLLECTIONS.USERS, uid));
+  const data = snap.exists() ? snap.data() : null;
+  if (data) userDocCache.set(uid, { data, time: Date.now() });
+  return data;
+}
+function rememberUserDoc(uid, data = {}) {
+  if (!uid || !data) return;
+  userDocCache.set(uid, { data: { ...(userDocCache.get(uid)?.data || {}), ...data }, time: Date.now() });
+}
+
 onAuthStateChanged(auth, async user => {
   try {
     if (user) {
@@ -157,17 +167,10 @@ async function upsertUserLookup(user, data = {}) {
     updatedAt: serverTimestamp()
   }, { merge: true });
 }
-
-// ── Ensure user document exists in Firestore ────────────────
 async function ensureUserDoc(user) {
   const ref  = doc(db, COLLECTIONS.USERS, user.uid);
   const snap = await getDoc(ref);
   const old  = snap.exists() ? (snap.data() || {}) : {};
-
-  // Important fix: never overwrite a real signup name with the temporary
-  // Firebase Auth value "NexUser". During signup, onAuthStateChanged can run
-  // before updateProfile() finishes, so we preserve the Firestore name and
-  // avoid writing a default name for brand-new docs.
   const authName = isRealName(user.displayName) ? String(user.displayName).trim() : "";
   const oldName  = isRealName(old.name) ? String(old.name).trim() : "";
   const finalName = authName || oldName || (snap.exists() ? bestStoredName(old) : "");
@@ -208,8 +211,6 @@ async function ensureUserDoc(user) {
     await updateDoc(ref, writeData);
   }
 
-  // Only update public lookup with a real/preserved name. This prevents new
-  // signup races from publishing "NexUser" over the correct name.
   if (finalName) {
     await upsertUserLookup(user, {
       uid: user.uid,
@@ -220,11 +221,9 @@ async function ensureUserDoc(user) {
       photoPublicId: finalPhotoPublicId
     });
   }
+  rememberUserDoc(user.uid, { ...old, ...writeData, name: finalName || old.name || bestStoredName({ email: finalEmail }) });
 }
 
-// ════════════════════════════════════════════════════════════
-//  AUTH — SIGN UP
-// ════════════════════════════════════════════════════════════
 export async function signUp(name, email, password, profileFile = null) {
   const cred = await createUserWithEmailAndPassword(auth, email, password);
 
@@ -240,15 +239,13 @@ export async function signUp(name, email, password, profileFile = null) {
   };
   await setDoc(doc(db, COLLECTIONS.USERS, cred.user.uid), userData, { merge: true });
   await upsertUserLookup(cred.user, userData);
+  rememberUserDoc(cred.user.uid, userData);
   if (profileFile) {
     await updateUserProfilePhoto(cred.user.uid, profileFile);
   }
   return cred.user;
 }
 
-// ════════════════════════════════════════════════════════════
-//  AUTH — SIGN IN
-// ════════════════════════════════════════════════════════════
 export async function signIn(email, password) {
   const cred = await signInWithEmailAndPassword(auth, email, password);
   return cred.user;
@@ -283,18 +280,21 @@ export async function updateUserProfilePhoto(uid, file) {
   }, { merge: true });
 
   await upsertUserLookup(auth.currentUser, profile);
+  rememberUserDoc(uid, profile);
 
-  // Keep existing chat list avatars in sync where rules allow it.
   try {
     const chatsSnap = await getDocs(query(collection(db, COLLECTIONS.CHATS), where("members", "array-contains", uid)));
-    const updates = [];
-    chatsSnap.forEach(chatDoc => {
+    let batch = writeBatch(db);
+    let count = 0;
+    for (const chatDoc of chatsSnap.docs) {
       const chat = chatDoc.data() || {};
-      updates.push(setDoc(doc(db, COLLECTIONS.CHATS, chatDoc.id), {
+      batch.set(doc(db, COLLECTIONS.CHATS, chatDoc.id), {
         memberPhotos: { ...(chat.memberPhotos || {}), [uid]: uploaded.url }
-      }, { merge: true }));
-    });
-    await Promise.all(updates);
+      }, { merge: true });
+      count += 1;
+      if (count >= 450) { await batch.commit(); batch = writeBatch(db); count = 0; }
+    }
+    if (count) await batch.commit();
   } catch (err) {
     console.warn("Could not sync profile photo into old chats:", err);
   }
@@ -332,7 +332,6 @@ export async function updateUserDisplayName(uid, newName) {
 
   await upsertUserLookup(auth.currentUser, profile);
 
-  // Keep existing chat list names in sync after username change.
   try {
     const chatsSnap = await getDocs(query(collection(db, COLLECTIONS.CHATS), where("members", "array-contains", uid)));
     const updates = [];
@@ -350,17 +349,11 @@ export async function updateUserDisplayName(uid, newName) {
   return cleanName;
 }
 
-// ════════════════════════════════════════════════════════════
-//  AUTH — SIGN OUT
-// ════════════════════════════════════════════════════════════
 export async function logOut(uid) {
   await markOffline(uid);
   await signOut(auth);
 }
 
-// ════════════════════════════════════════════════════════════
-//  PRESENCE — Heartbeat based online/offline status
-// ════════════════════════════════════════════════════════════
 async function markOnline(uid) {
   if (!uid) return;
   try {
@@ -405,16 +398,11 @@ function startPresence(uid) {
       }
     });
     window.addEventListener("beforeunload", () => {
-      // Firestore cannot be reliably awaited during tab close, but this works
-      // during most normal navigations and the heartbeat handles forced closes.
       markOffline(activePresenceId);
     });
   }
 }
 
-// ════════════════════════════════════════════════════════════
-//  USERS — Load/listen to all other users
-// ════════════════════════════════════════════════════════════
 function normalizeUsersFromSnap(snap, currentUid) {
   const currentEmail = String(auth.currentUser?.email || "").toLowerCase();
   const seen = new Set();
@@ -481,7 +469,6 @@ export async function findUserByPublicId(searchValue, currentUid) {
     if (lookupSnap.exists()) uid = lookupSnap.data().uid || "";
   }
 
-  // Fallback: allow searching by the full Firebase UID too.
   if (!uid) uid = raw.replace(/^id:/i, "").trim();
   if (!uid || uid === currentUid) return null;
 
@@ -504,7 +491,6 @@ export async function searchUsersByQuery(searchValue, currentUid) {
     });
   };
 
-  // Fast path for users created/updated with searchTokens.
   try {
     const tokenSnap = await getDocs(
       query(collection(db, COLLECTIONS.USERS), where("searchTokens", "array-contains", qText), limit(20))
@@ -514,8 +500,6 @@ export async function searchUsersByQuery(searchValue, currentUid) {
     console.warn("Token user search fallback:", err);
   }
 
-  // Reliable fallback for small student/demo projects: read users and match any part
-  // of name, email, NexChat ID, or UID. UI still hides users until a search is typed.
   try {
     const snap = await getDocs(collection(db, COLLECTIONS.USERS));
     const users = normalizeUsersFromSnap(snap, currentUid).filter(user => {
@@ -541,17 +525,10 @@ export async function searchUsersByQuery(searchValue, currentUid) {
     .slice(0, 20);
 }
 
-// ════════════════════════════════════════════════════════════
-//  USERS — Get single user data
-// ════════════════════════════════════════════════════════════
 export async function getUserData(uid) {
-  const snap = await getDoc(doc(db, COLLECTIONS.USERS, uid));
-  return snap.exists() ? snap.data() : null;
+  return getCachedUserDoc(uid);
 }
 
-// ════════════════════════════════════════════════════════════
-//  CHATS — Listen to current user's chats
-// ════════════════════════════════════════════════════════════
 export function startChatsListener(uid) {
   if (unsubChats) unsubChats();
   const q = query(
@@ -575,13 +552,10 @@ export function startChatsListener(uid) {
   );
 }
 
-// ════════════════════════════════════════════════════════════
-//  CHATS — Create or get chat between two users
-// ════════════════════════════════════════════════════════════
 async function bestNameForUid(uid, providedName = "") {
   try {
-    const snap = await getDoc(doc(db, COLLECTIONS.USERS, uid));
-    if (snap.exists()) return bestStoredName(snap.data());
+    const data = await getCachedUserDoc(uid);
+    if (data) return bestStoredName(data);
   } catch (err) {
     console.warn("Could not read user name for chat:", err);
   }
@@ -589,10 +563,8 @@ async function bestNameForUid(uid, providedName = "") {
 }
 async function bestPhotoForUid(uid) {
   try {
-    const snap = await getDoc(doc(db, COLLECTIONS.USERS, uid));
-    if (!snap.exists()) return "";
-    const data = snap.data() || {};
-    return data.photoURL || data.profilePhotoURL || data.profilePhoto || data.profilePic || "";
+    const data = await getCachedUserDoc(uid);
+    return data ? (data.photoURL || data.profilePhotoURL || data.profilePhoto || data.profilePic || "") : "";
   } catch (err) {
     console.warn("Could not read user photo for chat:", err);
     return "";
@@ -641,10 +613,6 @@ export async function getOrCreateChat(myUid, myName, contactUid, contactName) {
 
   return chatId;
 }
-
-// ════════════════════════════════════════════════════════════
-//  MESSAGES — Listen to messages in a chat
-// ════════════════════════════════════════════════════════════
 export function startMessagesListener(chatId) {
   if (unsubMessages) unsubMessages();
   const q = query(
@@ -667,9 +635,6 @@ export function startMessagesListener(chatId) {
   );
 }
 
-// ════════════════════════════════════════════════════════════
-//  MESSAGES — Send text/file/photo messages
-// ════════════════════════════════════════════════════════════
 function shortLastMessage(text) {
   return text.length > 45 ? text.slice(0, 45) + "…" : text;
 }
@@ -807,41 +772,44 @@ export async function sendGifMsg(chatId, senderId, senderName, gif = {}) {
   });
 }
 
-// ════════════════════════════════════════════════════════════
-//  MESSAGE / CHAT ACTIONS — seen status, delete messages, delete chat, block
-// ════════════════════════════════════════════════════════════
 export function stopMessagesListener() {
   if (unsubMessages) { unsubMessages(); unsubMessages = null; }
 }
 
 export async function markMessagesSeen(chatId, viewerId, messageIds = []) {
   if (!chatId || !viewerId || !Array.isArray(messageIds) || !messageIds.length) return;
-  const uniqueIds = [...new Set(messageIds)].filter(Boolean).slice(0, 50);
-  await Promise.all(uniqueIds.map(id =>
-    updateDoc(doc(db, COLLECTIONS.CHATS, chatId, COLLECTIONS.MESSAGES, id), {
+  const uniqueIds = [...new Set(messageIds)].filter(Boolean).slice(0, 200);
+  const batch = writeBatch(db);
+  uniqueIds.forEach(id => {
+    batch.update(doc(db, COLLECTIONS.CHATS, chatId, COLLECTIONS.MESSAGES, id), {
       seenBy: arrayUnion(viewerId)
-    }).catch(err => console.warn("Could not mark message seen:", err))
-  ));
+    });
+  });
+  await batch.commit().catch(err => console.warn("Could not mark messages seen:", err));
 }
 
 export async function deleteMessagesForMe(chatId, myUid, messageIds = []) {
   if (!chatId || !myUid || !Array.isArray(messageIds) || !messageIds.length) return;
-  const uniqueIds = [...new Set(messageIds)].filter(Boolean);
-  await Promise.all(uniqueIds.map(id =>
-    updateDoc(doc(db, COLLECTIONS.CHATS, chatId, COLLECTIONS.MESSAGES, id), {
+  const uniqueIds = [...new Set(messageIds)].filter(Boolean).slice(0, 450);
+  const batch = writeBatch(db);
+  uniqueIds.forEach(id => {
+    batch.update(doc(db, COLLECTIONS.CHATS, chatId, COLLECTIONS.MESSAGES, id), {
       deletedFor: arrayUnion(myUid)
-    })
-  ));
+    });
+  });
+  await batch.commit();
 }
 
 export async function deleteMessagesForEveryone(chatId, messageIds = []) {
   if (!chatId || !Array.isArray(messageIds) || !messageIds.length) return;
-  const uniqueIds = [...new Set(messageIds)].filter(Boolean);
-  await Promise.all(uniqueIds.map(id => deleteDoc(doc(db, COLLECTIONS.CHATS, chatId, COLLECTIONS.MESSAGES, id))));
-  await updateDoc(doc(db, COLLECTIONS.CHATS, chatId), {
+  const uniqueIds = [...new Set(messageIds)].filter(Boolean).slice(0, 450);
+  const batch = writeBatch(db);
+  uniqueIds.forEach(id => batch.delete(doc(db, COLLECTIONS.CHATS, chatId, COLLECTIONS.MESSAGES, id)));
+  batch.update(doc(db, COLLECTIONS.CHATS, chatId), {
     lastMessage: "Message deleted",
     lastMessageTime: serverTimestamp()
   });
+  await batch.commit();
 }
 
 export async function deleteMessages(chatId, messageIds = []) {
@@ -851,8 +819,15 @@ export async function deleteMessages(chatId, messageIds = []) {
 export async function deleteWholeChat(chatId) {
   if (!chatId) return;
   const msgSnap = await getDocs(collection(db, COLLECTIONS.CHATS, chatId, COLLECTIONS.MESSAGES));
-  await Promise.all(msgSnap.docs.map(d => deleteDoc(d.ref)));
-  await deleteDoc(doc(db, COLLECTIONS.CHATS, chatId));
+  let batch = writeBatch(db);
+  let count = 0;
+  for (const d of msgSnap.docs) {
+    batch.delete(d.ref);
+    count += 1;
+    if (count >= 450) { await batch.commit(); batch = writeBatch(db); count = 0; }
+  }
+  batch.delete(doc(db, COLLECTIONS.CHATS, chatId));
+  await batch.commit();
 }
 
 function blockDocId(blockerId, blockedId) {
@@ -877,9 +852,6 @@ export async function isContactBlocked(myUid, contactUid) {
   return { iBlocked: mine.exists(), theyBlocked: theirs.exists(), blocked: mine.exists() || theirs.exists() };
 }
 
-// ════════════════════════════════════════════════════════════
-//  CALLS — WebRTC signaling through Firestore
-// ════════════════════════════════════════════════════════════
 export function startIncomingCallsListener(uid, callback) {
   if (!uid) return;
   if (unsubIncomingCalls) unsubIncomingCalls();
@@ -900,6 +872,7 @@ export function startIncomingCallsListener(uid, callback) {
 
 export function stopIncomingCallsListener() {
   if (unsubIncomingCalls) { unsubIncomingCalls(); unsubIncomingCalls = null; }
+  userDocCache.clear();
 }
 
 export async function createCall({ chatId, callerId, callerName, calleeId, calleeName, type, offer }) {
@@ -960,10 +933,6 @@ export function listenIceCandidates(callId, role, callback) {
     err => console.error("ICE listener error:", err)
   );
 }
-
-// ════════════════════════════════════════════════════════════
-//  PRESENCE — Watch contact's online status
-// ════════════════════════════════════════════════════════════
 export function watchContactStatus(contactUid, callback) {
   if (unsubStatus) unsubStatus();
   unsubStatus = onSnapshot(
@@ -973,9 +942,6 @@ export function watchContactStatus(contactUid, callback) {
   );
 }
 
-// ════════════════════════════════════════════════════════════
-//  CLEANUP
-// ════════════════════════════════════════════════════════════
 function stopAllListeners() {
   if (unsubMessages) { unsubMessages(); unsubMessages = null; }
   if (unsubChats)    { unsubChats();    unsubChats    = null; }
@@ -986,7 +952,6 @@ function stopAllListeners() {
   activePresenceId = null;
 }
 
-// ── Friendly Auth Error Messages ────────────────────────────
 export function friendlyErr(code) {
   return ({
     "auth/user-not-found":         "No account found with this email.",

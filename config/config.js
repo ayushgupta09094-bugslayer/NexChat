@@ -1,3 +1,4 @@
+
 export const firebaseConfig = {
   apiKey: "AIzaSyB1lJmDxxpTLuzvctNa8IHIOzeY7m0QVCA",
   authDomain: "nexchat-db758.firebaseapp.com",

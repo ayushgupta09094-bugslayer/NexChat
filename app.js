@@ -32,9 +32,6 @@ import {
   friendlyErr
 } from "./firebase.js";
 import { GIPHY_CONFIG } from "./config/config.js";
-// ════════════════════════════════════════════════════════════
-//  STATE
-// ════════════════════════════════════════════════════════════
 let currentUser      = null;
 let currentChatId    = null;
 let currentContactId = null;
@@ -76,19 +73,25 @@ let profileCropDrag = null;
 let chatSearchTimer = null;
 let contactCache     = new Map();
 let chatRenderVersion = 0;
+let messagesDelegated = false;
+let lastMessageRenderSignature = "";
+const MAX_RENDER_SIGNATURE_ITEMS = 500;
 const RTC_CONFIG = {
   iceServers: [
     { urls: "stun:stun.l.google.com:19302" },
     { urls: "stun:stun1.l.google.com:19302" }
   ]
 };
-// ════════════════════════════════════════════════════════════
-//  DOM HELPER
-// ════════════════════════════════════════════════════════════
-const $ = id => document.getElementById(id);
-// ════════════════════════════════════════════════════════════
-//  ESCAPE HTML — prevent XSS
-// ════════════════════════════════════════════════════════════
+const domCache = new Map();
+const $ = id => {
+  if (!id) return null;
+  let el = domCache.get(id);
+  if (!el || !el.isConnected) {
+    el = document.getElementById(id);
+    if (el) domCache.set(id, el);
+  }
+  return el;
+};
 function esc(s) {
   return String(s ?? "")
     .replace(/&/g, "&amp;")
@@ -96,9 +99,6 @@ function esc(s) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
 }
-// ════════════════════════════════════════════════════════════
-//  AVATAR HELPERS
-// ════════════════════════════════════════════════════════════
 function initials(name = "") {
   return name.split(" ").map(w => w[0] || "").join("").slice(0, 2).toUpperCase() || "?";
 }
@@ -116,36 +116,60 @@ function avatarStyle(uid) {
   const [c1, c2] = hashColor(uid);
   return `background:linear-gradient(135deg,${c1},${c2})`;
 }
-// ════════════════════════════════════════════════════════════
-//  TIME / DATE FORMATTERS
-// ════════════════════════════════════════════════════════════
+const fmtCache = new Map();
+const timeFmt = new Intl.DateTimeFormat([], { hour: "2-digit", minute: "2-digit" });
+const chatDateFmt = new Intl.DateTimeFormat([], { day: "2-digit", month: "short" });
+const dateLabelFmt = new Intl.DateTimeFormat([], { weekday: "long", month: "short", day: "numeric" });
+const lastSeenFmt = new Intl.DateTimeFormat([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+function dateFromTs(ts) {
+  if (!ts) return null;
+  return ts.toDate ? ts.toDate() : new Date(ts);
+}
+function tsKey(ts) {
+  const d = dateFromTs(ts);
+  return d && !Number.isNaN(d.getTime()) ? d.getTime() : 0;
+}
+function cachedFmt(prefix, ts, compute) {
+  const key = `${prefix}:${tsKey(ts)}`;
+  if (fmtCache.has(key)) return fmtCache.get(key);
+  const value = compute();
+  if (fmtCache.size > 900) fmtCache.clear();
+  fmtCache.set(key, value);
+  return value;
+}
+function dayDiffFromNow(d) {
+  const start = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  return Math.floor((today - start) / 86400000);
+}
 function fmtTime(ts) {
   if (!ts) return "";
-  const d = ts.toDate ? ts.toDate() : new Date(ts);
-  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return cachedFmt("time", ts, () => timeFmt.format(dateFromTs(ts)));
 }
 function fmtChatTime(ts) {
   if (!ts) return "";
-  const d   = ts.toDate ? ts.toDate() : new Date(ts);
-  const now = new Date();
-  if (now.toDateString() === d.toDateString()) return fmtTime(ts);
-  const diff = Math.floor((now - d) / 86400000);
-  if (diff === 1) return "Yesterday";
-  return d.toLocaleDateString([], { day: "2-digit", month: "short" });
+  return cachedFmt("chat", ts, () => {
+    const d = dateFromTs(ts);
+    const diff = dayDiffFromNow(d);
+    if (diff === 0) return fmtTime(ts);
+    if (diff === 1) return "Yesterday";
+    return chatDateFmt.format(d);
+  });
 }
 function fmtDateLabel(ts) {
   if (!ts) return "Today";
-  const d   = ts.toDate ? ts.toDate() : new Date(ts);
-  const now = new Date();
-  if (now.toDateString() === d.toDateString()) return "Today";
-  const diff = Math.floor((now - d) / 86400000);
-  if (diff === 1) return "Yesterday";
-  return d.toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" });
+  return cachedFmt("label", ts, () => {
+    const d = dateFromTs(ts);
+    const diff = dayDiffFromNow(d);
+    if (diff === 0) return "Today";
+    if (diff === 1) return "Yesterday";
+    return dateLabelFmt.format(d);
+  });
 }
 function fmtLastSeen(ts) {
   if (!ts) return "a while ago";
-  const d = ts.toDate ? ts.toDate() : new Date(ts);
-  return d.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  return cachedFmt("seen", ts, () => lastSeenFmt.format(dateFromTs(ts)));
 }
 function userIsOnline(user = {}) {
   if (!user.lastActive) return false;
@@ -193,7 +217,7 @@ function cloudinaryDownloadUrl(url = "", name = "nexchat-file") {
 }
 function avatarHTML(name = "", photoURL = "") {
   const url = rawSafeUrl(photoURL);
-  return url ? `<img src="${esc(url)}" alt="${esc(name || "Profile picture")}" loading="lazy"/>` : esc(initials(name));
+  return url ? `<img src="${esc(url)}" alt="${esc(name || "Profile picture")}" loading="lazy" decoding="async"/>` : esc(initials(name));
 }
 function avatarClass(photoURL = "") {
   return rawSafeUrl(photoURL) ? " has-photo" : "";
@@ -309,6 +333,7 @@ function resetActiveChatUI() {
   currentContactId = null;
   currentContactData = null;
   currentMessages = [];
+  lastMessageRenderSignature = "";
   chatSearchQuery = "";
   selectionMode = false;
   selectedMessageIds.clear();
@@ -323,9 +348,6 @@ function resetActiveChatUI() {
   updateComposerState();
   document.querySelectorAll(".chat-item").forEach(el => el.classList.remove("active"));
 }
-// ════════════════════════════════════════════════════════════
-//  THEME — dark / light toggle
-// ════════════════════════════════════════════════════════════
 function applyTheme(theme = "dark") {
   const clean = theme === "light" ? "light" : "dark";
   document.documentElement.dataset.theme = clean;
@@ -344,10 +366,6 @@ window.toggleTheme = function() {
   applyTheme(document.documentElement.dataset.theme === "light" ? "dark" : "light");
 };
 initTheme();
-
-// ════════════════════════════════════════════════════════════
-//  TOAST
-// ════════════════════════════════════════════════════════════
 window.showToast = function(msg, ms = 3000) {
   const t = $("toast");
   t.textContent = msg;
@@ -406,9 +424,6 @@ function showErr(elId, msg) {
 function clearErr(elId) {
   $(elId).style.display = "none";
 }
-// ════════════════════════════════════════════════════════════
-//  AUTH STATE CALLBACK (called from firebase.js)
-// ════════════════════════════════════════════════════════════
 export function onAuthReady(user, isLoggedIn) {
   $("loading-screen").style.display = "none";
   if (isLoggedIn && user) {
@@ -427,10 +442,8 @@ export function onAuthReady(user, isLoggedIn) {
     $("app-screen").style.display  = "none";
   }
 }
-// ════════════════════════════════════════════════════════════
-//  INIT APP UI — populate profile & avatar
-// ════════════════════════════════════════════════════════════
 async function initAppUI() {
+  bindMessageAreaDelegation();
   const name = displayUserName({ displayName: currentUser.displayName, email: currentUser.email, uid: currentUser.uid }, "NexUser");
   const photoURL = userPhotoURL(currentUser) || "";
   applyAvatar($("profile-av-big"), currentUser.uid, name, photoURL);
@@ -457,9 +470,6 @@ async function initAppUI() {
     console.warn("Could not refresh profile data:", err);
   }
 }
-// ════════════════════════════════════════════════════════════
-//  AUTH HANDLERS
-// ════════════════════════════════════════════════════════════
 window.handleLogin = async function(e) {
   e.preventDefault();
   clearErr("login-error");
@@ -513,9 +523,6 @@ window.switchTab = function(tab) {
   clearErr("login-error");
   clearErr("signup-error");
 };
-// ════════════════════════════════════════════════════════════
-//  USERS — Render & Filter
-// ════════════════════════════════════════════════════════════
 function renderUserSearchHint(message) {
   const list = $("users-list");
   if (!list) return;
@@ -544,6 +551,7 @@ function renderUsersList(users, hasQuery = false) {
   }
 
   list.innerHTML = "";
+  const userFrag = document.createDocumentFragment();
 
   safeUsers.forEach(rawUser => {
     const u = rememberContact(rawUser) || rawUser;
@@ -575,14 +583,14 @@ function renderUsersList(users, hasQuery = false) {
       e.stopPropagation();
       showUserProfile(u.id);
     });
-    list.appendChild(item);
+    userFrag.appendChild(item);
   });
+  list.appendChild(userFrag);
 }
 
 window.filterUsers = function() {
   const q = $("user-search-inp").value.trim();
   if (userSearchTimer) clearTimeout(userSearchTimer);
-
   if (!q) {
     renderUserSearchHint();
     return;
@@ -594,7 +602,6 @@ window.filterUsers = function() {
 
   const list = $("users-list");
   if (list) list.innerHTML = '<div class="spinner"></div>';
-
   userSearchTimer = setTimeout(async () => {
     try {
       let users = await searchUsersByQuery(q, currentUser?.uid);
@@ -618,9 +625,6 @@ window.copyMyId = async function() {
     showToast(`Your NexChat ID: ${id}`, 5000);
   }
 };
-// ════════════════════════════════════════════════════════════
-//  CHATS — Callback from firebase.js
-// ════════════════════════════════════════════════════════════
 export function onChatsUpdate(chats) {
   allChats = Array.isArray(chats) ? chats : [];
   allChats.forEach(maybeNotifyChat);
@@ -659,9 +663,14 @@ function renderChatsList(chats) {
   if (!list || !noMsg) return;
   chatRenderVersion += 1;
   const version = chatRenderVersion;
-  [...list.children].forEach(c => { if (c.id !== "no-chats-msg") c.remove(); });
-  if (!chats.length) { noMsg.style.display = "flex"; return; }
+  if (!chats.length) {
+    noMsg.style.display = "flex";
+    list.replaceChildren(noMsg);
+    return;
+  }
   noMsg.style.display = "none";
+  const chatFrag = document.createDocumentFragment();
+  const refreshQueue = [];
   chats.forEach(chat => {
     const { otherId, name: otherName, photoURL } = chatContactSummary(chat);
     if (!otherId) return;
@@ -686,9 +695,11 @@ function renderChatsList(chats) {
         </div>
       </div>`;
     div.onclick = () => openChat(otherId, cachedContactName(otherId, otherName));
-    list.appendChild(div);
-    refreshChatContactInList(chat, version);
+    chatFrag.appendChild(div);
+    refreshQueue.push(chat);
   });
+  list.replaceChildren(noMsg, chatFrag);
+  refreshQueue.forEach(chat => refreshChatContactInList(chat, version));
 }
 window.filterChats = function() {
   const q = $("chat-search").value.toLowerCase();
@@ -701,9 +712,6 @@ window.filterChats = function() {
     return name.includes(q) || last.includes(q);
   }));
 };
-// ════════════════════════════════════════════════════════════
-//  OPEN / START CHAT
-// ════════════════════════════════════════════════════════════
 window.startChat = async function(uid, name) {
   if (!uid || !currentUser) return;
   if (uid === currentUser.uid) {
@@ -725,8 +733,6 @@ async function openChat(contactUid, contactName) {
   if (!contactUid) throw new Error("Missing contact uid.");
 
   currentContactId = contactUid;
-  // Fetch contact data before creating/updating chat so old "NexUser" names
-  // are replaced with the real profile name/fallback email name.
   const cData = await getUserData(contactUid) || {};
   rememberContact({ ...cData, id: contactUid, uid: contactUid });
   const contactDisplayForChat = displayUserName({ ...cData, id: contactUid, uid: contactUid }, contactName || "NexUser");
@@ -743,7 +749,6 @@ async function openChat(contactUid, contactName) {
   const blockState = await isContactBlocked(currentUser.uid, contactUid).catch(() => ({ iBlocked: false, theyBlocked: false, blocked: false }));
   contactBlocked = !!blockState.blocked;
   const displayName = displayUserName({ ...cData, id: contactUid, uid: contactUid }, contactDisplayForChat || contactName || "NexUser");
-  // Update header
   $("chat-h-name").textContent = displayName;
   const statusEl = $("chat-h-status");
   if (userIsOnline(cData)) {
@@ -755,23 +760,18 @@ async function openChat(contactUid, contactName) {
   }
   const hav = $("chat-h-av");
   applyAvatar(hav, contactUid, displayName, userPhotoURL(cData), ";width:40px;height:40px;border-radius:12px;font-size:15px");
-  // Show active chat view
   $("chat-empty").style.display  = "none";
   $("active-chat").style.display = "flex";
-  // Watch contact's live status
   watchContactStatus(contactUid, data => {
     if (currentContactId !== contactUid) return;
     const live = userIsOnline(data);
     statusEl.textContent = live ? "online" : "last seen " + fmtLastSeen(data.lastSeen || data.lastActive);
     statusEl.className   = "chat-h-status" + (live ? " online" : "");
   });
-  // Highlight in sidebar
   document.querySelectorAll(".chat-item").forEach(el => el.classList.remove("active"));
   const ci = $("ci-" + currentChatId);
   if (ci) ci.classList.add("active");
-  // Mobile: show chat area
   if (window.innerWidth <= 720) $("chat-area").classList.add("mobile-active");
-  // Reset chat tools
   chatSearchQuery = "";
   selectionMode = false;
   selectedMessageIds.clear();
@@ -779,13 +779,10 @@ async function openChat(contactUid, contactName) {
   if ($("chat-search-input")) $("chat-search-input").value = "";
   updateSelectionToolbar();
   updateComposerState();
-  // Start listening to messages
+  lastMessageRenderSignature = "";
   startMessagesListener(currentChatId);
 }
 
-// ════════════════════════════════════════════════════════════
-//  MESSAGES — Callback from firebase.js
-// ════════════════════════════════════════════════════════════
 export function onMessagesUpdate(msgs) {
   currentMessages = Array.isArray(msgs) ? msgs : [];
   scheduleSeenMark();
@@ -827,6 +824,41 @@ document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") scheduleSeenMark();
 });
 
+function messageRenderSignature(messages, q) {
+  const selectedKey = selectionMode ? [...selectedMessageIds].sort().join(",") : "";
+  const parts = messages.slice(-MAX_RENDER_SIGNATURE_ITEMS).map(msg => [
+    msg.id,
+    msg.senderId,
+    msg.type,
+    msg.text,
+    msg.fileUrl,
+    msg.fileName,
+    msg.timestamp?.seconds || tsKey(msg.timestamp),
+    Array.isArray(msg.seenBy) ? msg.seenBy.join(",") : "",
+    Array.isArray(msg.deletedFor) ? msg.deletedFor.join(",") : ""
+  ].join("~"));
+  return [currentChatId, q, selectionMode ? "1" : "0", selectedKey, messages.length, parts.join("|")].join("||");
+}
+
+function bindMessageAreaDelegation() {
+  const area = $("messages-area");
+  if (!area || messagesDelegated) return;
+  messagesDelegated = true;
+  area.addEventListener("click", e => {
+    const downloadBtn = e.target.closest?.(".msg-download-btn");
+    if (downloadBtn) {
+      e.preventDefault();
+      e.stopPropagation();
+      downloadAttachment(downloadBtn.dataset.downloadUrl, downloadBtn.dataset.downloadName);
+      return;
+    }
+    const wrap = e.target.closest?.(".msg-wrap");
+    if (!wrap || !selectionMode) return;
+    if (e.target.closest("a")) return;
+    window.toggleMessageSelection(wrap.dataset.messageId);
+  });
+}
+
 function renderMessages() {
   const area = $("messages-area");
   if (!area) return;
@@ -837,6 +869,10 @@ function renderMessages() {
   const displayMsgs = q
     ? baseMsgs.filter(msg => messageMatchesSearch(msg, q))
     : baseMsgs;
+
+  const signature = messageRenderSignature(displayMsgs, q);
+  if (signature === lastMessageRenderSignature) return;
+  lastMessageRenderSignature = signature;
 
   const frag = document.createDocumentFragment();
 
@@ -1029,7 +1065,7 @@ function buildAttachment(msg) {
   if (msg.type === "gif") {
     return `
       <a class="msg-image-link gif-link" href="${href}" target="_blank" rel="noopener noreferrer" title="Open GIF">
-        <img class="msg-image msg-gif" src="${href}" alt="${name}" loading="lazy"/>
+        <img class="msg-image msg-gif" src="${href}" alt="${name}" loading="lazy" decoding="async"/>
       </a>
       <div class="msg-file-name"><i class="fa-solid fa-film"></i> GIF${msg.gifTitle ? ` · ${esc(msg.gifTitle)}` : ""}</div>
       <div class="msg-media-actions">${downloadBtn}</div>`;
@@ -1038,7 +1074,7 @@ function buildAttachment(msg) {
   if (msg.type === "image" || type.startsWith("image/")) {
     return `
       <a class="msg-image-link" href="${href}" target="_blank" rel="noopener noreferrer" title="Open image">
-        <img class="msg-image" src="${href}" alt="${name}" loading="lazy"/>
+        <img class="msg-image" src="${href}" alt="${name}" loading="lazy" decoding="async"/>
       </a>
       <div class="msg-file-name">${name}${size ? ` · ${size}` : ""}</div>
       <div class="msg-media-actions">${downloadBtn}</div>`;
@@ -1076,18 +1112,6 @@ function buildBubble(msg) {
         ${isOut ? `<span class="b-ticks${seen ? " seen" : ""}" title="${seen ? "Seen" : "Sent"}"><i class="fa-solid fa-check-double"></i><small>${seen ? "Seen" : "Sent"}</small></span>` : ""}
       </div>
     </div>`;
-  wrap.addEventListener("click", e => {
-    if (!selectionMode) return;
-    if (e.target.closest("a") || e.target.closest(".msg-download-btn")) return;
-    window.toggleMessageSelection(msg.id);
-  });
-  wrap.querySelectorAll(".msg-download-btn").forEach(btn => {
-    btn.addEventListener("click", e => {
-      e.preventDefault();
-      e.stopPropagation();
-      downloadAttachment(btn.dataset.downloadUrl, btn.dataset.downloadName);
-    });
-  });
   return wrap;
 }
 window.downloadAttachment = async function(url, name = "nexchat-file") {
@@ -1113,9 +1137,6 @@ window.downloadAttachment = async function(url, name = "nexchat-file") {
   }
 };
 
-// ════════════════════════════════════════════════════════════
-//  GIPHY GIF PICKER
-// ════════════════════════════════════════════════════════════
 function giphyConfigured() {
   return GIPHY_CONFIG?.apiKey && !String(GIPHY_CONFIG.apiKey).includes("YOUR_");
 }
@@ -1134,7 +1155,7 @@ function renderGifResults(items = []) {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "gif-card";
-    btn.innerHTML = `<img src="${esc(image)}" alt="${esc(gif.title || "GIF")}" loading="lazy"/>`;
+    btn.innerHTML = `<img src="${esc(image)}" alt="${esc(gif.title || "GIF")}" loading="lazy" decoding="async"/>`;
     btn.addEventListener("click", () => sendSelectedGif({
       id: gif.id || "",
       title: gif.title || "GIF",
@@ -1204,9 +1225,6 @@ window.sendSelectedGif = async function(gif) {
   }
 };
 
-// ════════════════════════════════════════════════════════════
-//  SEND MESSAGE
-// ════════════════════════════════════════════════════════════
 window.sendMessage = async function() {
   const inp  = $("message-input");
   const text = inp.value.trim();
@@ -1275,9 +1293,7 @@ window.autoGrow = function(el) {
   el.style.height = "auto";
   el.style.height = Math.min(el.scrollHeight, 120) + "px";
 };
-// ════════════════════════════════════════════════════════════
-//  CAMERA PHOTO CAPTURE
-// ════════════════════════════════════════════════════════════
+
 function stopCameraStream() {
   if (cameraStream) {
     cameraStream.getTracks().forEach(track => track.stop());
@@ -1343,9 +1359,6 @@ window.captureCameraPhoto = async function() {
   }, "image/jpeg", 0.9);
 };
 
-// ════════════════════════════════════════════════════════════
-//  PROFILE PHOTO — crop/adjust and upload
-// ════════════════════════════════════════════════════════════
 function updateSignupPhotoPreview(fileOrUrl) {
   const box = $("signup-photo-preview");
   const txt = $("signup-photo-text");
@@ -1493,9 +1506,6 @@ window.saveProfileCrop = async function() {
 };
 setTimeout(bindCropCanvasDrag, 0);
 
-// ════════════════════════════════════════════════════════════
-//  USER PROFILE VIEW
-// ════════════════════════════════════════════════════════════
 window.showUserProfile = async function(uid = currentContactId) {
   if (!uid) return;
   try {
@@ -1532,9 +1542,6 @@ window.closeUserProfile = function() {
   $("user-profile-modal")?.classList.remove("show");
 };
 
-// ════════════════════════════════════════════════════════════
-//  USERNAME UPDATE
-// ════════════════════════════════════════════════════════════
 window.openUsernameEdit = function() {
   const form = $("profile-name-edit-form");
   const input = $("profile-name-input");
@@ -1575,9 +1582,6 @@ window.handleUsernameUpdate = async function(e) {
   }
 };
 
-// ════════════════════════════════════════════════════════════
-//  PANEL TOGGLES
-// ════════════════════════════════════════════════════════════
 window.toggleProfile = function() {
   $("profile-panel").classList.toggle("open");
 };
@@ -1596,9 +1600,6 @@ window.closeMobileChat = function() {
   $("chat-area").classList.remove("mobile-active");
 };
 
-// ════════════════════════════════════════════════════════════
-//  AUDIO / VIDEO CALLING — WebRTC + Firestore signaling
-// ════════════════════════════════════════════════════════════
 function showIncomingCall(call) {
   incomingCallData = call;
   const modal = $("incoming-call");
