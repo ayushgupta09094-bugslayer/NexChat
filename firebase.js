@@ -33,9 +33,13 @@ import {
   onChatsUpdate,
   onMessagesUpdate
 } from "./app.js";
+
+// ── Initialize Firebase ──────────────────────────────────────
 const fbApp   = initializeApp(firebaseConfig);
 const auth    = getAuth(fbApp);
 const db      = getFirestore(fbApp);
+
+// ── Internal State ───────────────────────────────────────────
 let unsubMessages    = null;
 let unsubChats       = null;
 let unsubStatus      = null;
@@ -61,6 +65,9 @@ function rememberUserDoc(uid, data = {}) {
   userDocCache.set(uid, { data: { ...(userDocCache.get(uid)?.data || {}), ...data }, time: Date.now() });
 }
 
+// ════════════════════════════════════════════════════════════
+//  AUTH — LISTENER
+// ════════════════════════════════════════════════════════════
 onAuthStateChanged(auth, async user => {
   try {
     if (user) {
@@ -167,10 +174,17 @@ async function upsertUserLookup(user, data = {}) {
     updatedAt: serverTimestamp()
   }, { merge: true });
 }
+
+// ── Ensure user document exists in Firestore ────────────────
 async function ensureUserDoc(user) {
   const ref  = doc(db, COLLECTIONS.USERS, user.uid);
   const snap = await getDoc(ref);
   const old  = snap.exists() ? (snap.data() || {}) : {};
+
+  // Important fix: never overwrite a real signup name with the temporary
+  // Firebase Auth value "NexUser". During signup, onAuthStateChanged can run
+  // before updateProfile() finishes, so we preserve the Firestore name and
+  // avoid writing a default name for brand-new docs.
   const authName = isRealName(user.displayName) ? String(user.displayName).trim() : "";
   const oldName  = isRealName(old.name) ? String(old.name).trim() : "";
   const finalName = authName || oldName || (snap.exists() ? bestStoredName(old) : "");
@@ -211,6 +225,8 @@ async function ensureUserDoc(user) {
     await updateDoc(ref, writeData);
   }
 
+  // Only update public lookup with a real/preserved name. This prevents new
+  // signup races from publishing "NexUser" over the correct name.
   if (finalName) {
     await upsertUserLookup(user, {
       uid: user.uid,
@@ -224,6 +240,9 @@ async function ensureUserDoc(user) {
   rememberUserDoc(user.uid, { ...old, ...writeData, name: finalName || old.name || bestStoredName({ email: finalEmail }) });
 }
 
+// ════════════════════════════════════════════════════════════
+//  AUTH — SIGN UP
+// ════════════════════════════════════════════════════════════
 export async function signUp(name, email, password, profileFile = null) {
   const cred = await createUserWithEmailAndPassword(auth, email, password);
 
@@ -246,6 +265,9 @@ export async function signUp(name, email, password, profileFile = null) {
   return cred.user;
 }
 
+// ════════════════════════════════════════════════════════════
+//  AUTH — SIGN IN
+// ════════════════════════════════════════════════════════════
 export async function signIn(email, password) {
   const cred = await signInWithEmailAndPassword(auth, email, password);
   return cred.user;
@@ -282,6 +304,7 @@ export async function updateUserProfilePhoto(uid, file) {
   await upsertUserLookup(auth.currentUser, profile);
   rememberUserDoc(uid, profile);
 
+  // Keep existing chat list avatars in sync where rules allow it.
   try {
     const chatsSnap = await getDocs(query(collection(db, COLLECTIONS.CHATS), where("members", "array-contains", uid)));
     let batch = writeBatch(db);
@@ -332,6 +355,7 @@ export async function updateUserDisplayName(uid, newName) {
 
   await upsertUserLookup(auth.currentUser, profile);
 
+  // Keep existing chat list names in sync after username change.
   try {
     const chatsSnap = await getDocs(query(collection(db, COLLECTIONS.CHATS), where("members", "array-contains", uid)));
     const updates = [];
@@ -349,11 +373,17 @@ export async function updateUserDisplayName(uid, newName) {
   return cleanName;
 }
 
+// ════════════════════════════════════════════════════════════
+//  AUTH — SIGN OUT
+// ════════════════════════════════════════════════════════════
 export async function logOut(uid) {
   await markOffline(uid);
   await signOut(auth);
 }
 
+// ════════════════════════════════════════════════════════════
+//  PRESENCE — Heartbeat based online/offline status
+// ════════════════════════════════════════════════════════════
 async function markOnline(uid) {
   if (!uid) return;
   try {
@@ -398,11 +428,16 @@ function startPresence(uid) {
       }
     });
     window.addEventListener("beforeunload", () => {
+      // Firestore cannot be reliably awaited during tab close, but this works
+      // during most normal navigations and the heartbeat handles forced closes.
       markOffline(activePresenceId);
     });
   }
 }
 
+// ════════════════════════════════════════════════════════════
+//  USERS — Load/listen to all other users
+// ════════════════════════════════════════════════════════════
 function normalizeUsersFromSnap(snap, currentUid) {
   const currentEmail = String(auth.currentUser?.email || "").toLowerCase();
   const seen = new Set();
@@ -469,6 +504,7 @@ export async function findUserByPublicId(searchValue, currentUid) {
     if (lookupSnap.exists()) uid = lookupSnap.data().uid || "";
   }
 
+  // Fallback: allow searching by the full Firebase UID too.
   if (!uid) uid = raw.replace(/^id:/i, "").trim();
   if (!uid || uid === currentUid) return null;
 
@@ -491,6 +527,7 @@ export async function searchUsersByQuery(searchValue, currentUid) {
     });
   };
 
+  // Fast path for users created/updated with searchTokens.
   try {
     const tokenSnap = await getDocs(
       query(collection(db, COLLECTIONS.USERS), where("searchTokens", "array-contains", qText), limit(20))
@@ -500,6 +537,8 @@ export async function searchUsersByQuery(searchValue, currentUid) {
     console.warn("Token user search fallback:", err);
   }
 
+  // Reliable fallback for small student/demo projects: read users and match any part
+  // of name, email, NexChat ID, or UID. UI still hides users until a search is typed.
   try {
     const snap = await getDocs(collection(db, COLLECTIONS.USERS));
     const users = normalizeUsersFromSnap(snap, currentUid).filter(user => {
@@ -525,10 +564,16 @@ export async function searchUsersByQuery(searchValue, currentUid) {
     .slice(0, 20);
 }
 
+// ════════════════════════════════════════════════════════════
+//  USERS — Get single user data
+// ════════════════════════════════════════════════════════════
 export async function getUserData(uid) {
   return getCachedUserDoc(uid);
 }
 
+// ════════════════════════════════════════════════════════════
+//  CHATS — Listen to current user's chats
+// ════════════════════════════════════════════════════════════
 export function startChatsListener(uid) {
   if (unsubChats) unsubChats();
   const q = query(
@@ -552,6 +597,9 @@ export function startChatsListener(uid) {
   );
 }
 
+// ════════════════════════════════════════════════════════════
+//  CHATS — Create or get chat between two users
+// ════════════════════════════════════════════════════════════
 async function bestNameForUid(uid, providedName = "") {
   try {
     const data = await getCachedUserDoc(uid);
@@ -613,6 +661,10 @@ export async function getOrCreateChat(myUid, myName, contactUid, contactName) {
 
   return chatId;
 }
+
+// ════════════════════════════════════════════════════════════
+//  MESSAGES — Listen to messages in a chat
+// ════════════════════════════════════════════════════════════
 export function startMessagesListener(chatId) {
   if (unsubMessages) unsubMessages();
   const q = query(
@@ -635,6 +687,9 @@ export function startMessagesListener(chatId) {
   );
 }
 
+// ════════════════════════════════════════════════════════════
+//  MESSAGES — Send text/file/photo messages
+// ════════════════════════════════════════════════════════════
 function shortLastMessage(text) {
   return text.length > 45 ? text.slice(0, 45) + "…" : text;
 }
@@ -772,6 +827,9 @@ export async function sendGifMsg(chatId, senderId, senderName, gif = {}) {
   });
 }
 
+// ════════════════════════════════════════════════════════════
+//  MESSAGE / CHAT ACTIONS — seen status, delete messages, delete chat, block
+// ════════════════════════════════════════════════════════════
 export function stopMessagesListener() {
   if (unsubMessages) { unsubMessages(); unsubMessages = null; }
 }
@@ -852,6 +910,9 @@ export async function isContactBlocked(myUid, contactUid) {
   return { iBlocked: mine.exists(), theyBlocked: theirs.exists(), blocked: mine.exists() || theirs.exists() };
 }
 
+// ════════════════════════════════════════════════════════════
+//  CALLS — WebRTC signaling through Firestore
+// ════════════════════════════════════════════════════════════
 export function startIncomingCallsListener(uid, callback) {
   if (!uid) return;
   if (unsubIncomingCalls) unsubIncomingCalls();
@@ -933,6 +994,10 @@ export function listenIceCandidates(callId, role, callback) {
     err => console.error("ICE listener error:", err)
   );
 }
+
+// ════════════════════════════════════════════════════════════
+//  PRESENCE — Watch contact's online status
+// ════════════════════════════════════════════════════════════
 export function watchContactStatus(contactUid, callback) {
   if (unsubStatus) unsubStatus();
   unsubStatus = onSnapshot(
@@ -942,6 +1007,9 @@ export function watchContactStatus(contactUid, callback) {
   );
 }
 
+// ════════════════════════════════════════════════════════════
+//  CLEANUP
+// ════════════════════════════════════════════════════════════
 function stopAllListeners() {
   if (unsubMessages) { unsubMessages(); unsubMessages = null; }
   if (unsubChats)    { unsubChats();    unsubChats    = null; }
@@ -952,6 +1020,7 @@ function stopAllListeners() {
   activePresenceId = null;
 }
 
+// ── Friendly Auth Error Messages ────────────────────────────
 export function friendlyErr(code) {
   return ({
     "auth/user-not-found":         "No account found with this email.",

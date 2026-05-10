@@ -11,6 +11,7 @@
   <link rel="stylesheet" href="style.css"/>
 </head>
 <body>
+  <!-- ═══════ LOADING SCREEN ═══════ -->
   <div id="loading-screen">
     <div class="loading-logo-wrap">
       <div class="loading-logo-box">
@@ -23,6 +24,7 @@
       <div class="loading-bar"></div>
     </div>
   </div>
+  <!-- ═══════ AUTH SCREEN ═══════ -->
   <div id="auth-screen">
     <div class="auth-card">
       <div class="auth-logo-section">
@@ -35,6 +37,7 @@
         <button class="auth-tab" id="tab-signup" onclick="switchTab('signup')">Sign Up</button>
       </div>
       <div class="auth-body">
+        <!-- LOGIN FORM -->
         <form class="auth-form" id="login-form" onsubmit="handleLogin(event)">
           <div>
             <div class="field-label">Email Address</div>
@@ -53,6 +56,7 @@
           <div class="auth-error" id="login-error"></div>
           <button class="auth-btn" type="submit" id="login-btn">Sign In to NexChat</button>
         </form>
+        <!-- SIGNUP FORM -->
         <form class="auth-form" id="signup-form" style="display:none" onsubmit="handleSignup(event)">
           <div>
             <div class="field-label">Full Name</div>
@@ -96,9 +100,12 @@
       </div>
     </div>
   </div>
+  <!-- ═══════ MAIN APP ═══════ -->
   <div id="app-screen">
     <div class="app-layout">
+      <!-- ── SIDEBAR ── -->
       <div class="sidebar" id="sidebar">
+        <!-- Profile Slide Panel -->
         <div class="profile-panel" id="profile-panel">
           <div class="profile-panel-hdr">
             <button class="icon-btn" onclick="toggleProfile()"><i class="fa-solid fa-arrow-left"></i></button>
@@ -147,6 +154,7 @@
             </button>
           </div>
         </div>
+        <!-- New Conversation Slide Panel -->
         <div class="new-conv-panel" id="new-conv-panel">
           <div class="panel-hdr">
             <button class="icon-btn" onclick="toggleNewConv()"><i class="fa-solid fa-arrow-left"></i></button>
@@ -162,6 +170,7 @@
             <div class="spinner"></div>
           </div>
         </div>
+        <!-- Sidebar Header -->
         <div class="sidebar-header">
           <div class="brand-section">
             <div class="brand-logo"><i class="fa-solid fa-bolt-lightning"></i></div>
@@ -179,6 +188,7 @@
             </button>
           </div>
         </div>
+        <!-- Search Bar -->
         <div class="sidebar-search">
           <div class="search-wrap">
             <i class="fa-solid fa-magnifying-glass"></i>
@@ -186,17 +196,21 @@
           </div>
         </div>
         <div class="section-label">Conversations</div>
+        <!-- Chats List -->
         <div class="chats-list" id="chats-list">
           <div class="no-chats-msg" id="no-chats-msg">
             <i class="fa-solid fa-comments"></i>
             <p>No conversations yet.<br/>Hit the pencil icon to start one!</p>
           </div>
         </div>
+        <!-- Floating Action Button -->
         <button class="fab-btn" onclick="toggleNewConv()" title="New Chat">
           <i class="fa-solid fa-plus"></i>
         </button>
       </div>
+      <!-- ── CHAT AREA ── -->
       <div class="chat-area" id="chat-area">
+        <!-- Empty / Welcome State -->
         <div class="chat-empty" id="chat-empty">
           <div class="empty-logo"><i class="fa-solid fa-bolt-lightning"></i></div>
           <h2>Welcome to NexChat</h2>
@@ -206,7 +220,9 @@
             Protected with Firebase Auth + Firestore rules
           </div>
         </div>
+        <!-- Active Chat View -->
         <div id="active-chat">
+          <!-- Chat Header -->
           <div class="chat-header">
             <button class="icon-btn back-btn" onclick="closeMobileChat()">
               <i class="fa-solid fa-arrow-left"></i>
@@ -221,6 +237,7 @@
             <button class="icon-btn call-btn" onclick="startCall('video')" title="Video call"><i class="fa-solid fa-video"></i></button>
             <button class="icon-btn mobile-visible" id="chat-menu-btn" onclick="toggleChatMenu(event)" title="Chat options"><i class="fa-solid fa-ellipsis-vertical"></i></button>
           </div>
+          <!-- Chat Search Panel -->
           <div class="chat-search-panel" id="chat-search-panel">
             <div class="search-wrap">
               <i class="fa-solid fa-magnifying-glass"></i>
@@ -228,6 +245,7 @@
               <button class="inline-clear-btn" type="button" onclick="clearChatSearch()" title="Close search"><i class="fa-solid fa-xmark"></i></button>
             </div>
           </div>
+          <!-- Message Selection Bar -->
           <div class="message-select-bar" id="message-select-bar">
             <span id="selected-count">0 selected</span>
             <div class="select-actions">
@@ -236,17 +254,20 @@
               <button type="button" onclick="toggleSelectMode(false)">Cancel</button>
             </div>
           </div>
+          <!-- Chat Menu -->
           <div class="chat-menu" id="chat-menu">
             <button type="button" onclick="viewCurrentProfile(); toggleChatMenu(event)"><i class="fa-solid fa-user"></i> View profile</button>
             <button type="button" onclick="toggleSelectMode(true)"><i class="fa-solid fa-check-square"></i> Select messages</button>
             <button type="button" onclick="deleteCurrentChat()"><i class="fa-solid fa-trash-can"></i> Delete whole chat</button>
             <button type="button" class="danger" onclick="blockCurrentContact()"><i class="fa-solid fa-ban"></i> Block contact</button>
           </div>
+          <!-- Messages -->
           <div class="messages-area" id="messages-area">
             <div class="typing-bubble" id="typing-bubble">
               <div class="typing-dots"><span></span><span></span><span></span></div>
             </div>
           </div>
+          <!-- Message Input -->
           <div class="chat-input-area">
             <div class="msg-input-wrap">
               <textarea
@@ -278,9 +299,10 @@
             </button>
           </div>
         </div>
-      </div>
+      </div><!-- /chat-area -->
     </div>
   </div>
+  <!-- User Profile View Modal -->
   <div class="user-profile-modal" id="user-profile-modal">
     <div class="user-profile-card">
       <button class="profile-close" onclick="closeUserProfile()" title="Close"><i class="fa-solid fa-xmark"></i></button>
@@ -297,6 +319,8 @@
       </button>
     </div>
   </div>
+
+  <!-- GIPHY GIF Picker Modal -->
   <div class="gif-modal" id="gif-modal">
     <div class="gif-box">
       <div class="gif-hdr">
@@ -313,6 +337,8 @@
       <div class="gif-credit">GIFs powered by GIPHY</div>
     </div>
   </div>
+
+  <!-- Camera Capture Modal -->
   <div class="camera-modal" id="camera-modal">
     <div class="camera-box">
       <div class="camera-hdr">
@@ -326,6 +352,8 @@
       </div>
     </div>
   </div>
+
+  <!-- Incoming Call Notification -->
   <div class="incoming-call" id="incoming-call">
     <div class="incoming-call-card">
       <div class="incoming-icon"><i class="fa-solid fa-phone-volume"></i></div>
@@ -337,6 +365,8 @@
       <button class="call-action decline" onclick="declineIncomingCall()" title="Decline"><i class="fa-solid fa-phone-slash"></i></button>
     </div>
   </div>
+
+  <!-- Call Modal -->
   <div class="call-modal" id="call-modal">
     <div class="call-box">
       <div class="call-top">
@@ -359,6 +389,8 @@
     </div>
     <button class="call-floating-end" onclick="endCurrentCall()" title="End call"><i class="fa-solid fa-phone-slash"></i></button>
   </div>
+
+  <!-- Profile Photo Crop Modal -->
   <div class="profile-crop-modal" id="profile-crop-modal">
     <div class="profile-crop-box">
       <div class="profile-crop-hdr">
@@ -377,7 +409,10 @@
       </div>
     </div>
   </div>
+
+  <!-- Toast Notification -->
   <div id="toast"></div>
+  <!-- ═══════ SCRIPTS ═══════ -->
   <script type="module" src="app.js"></script>
 </body>
 </html>
