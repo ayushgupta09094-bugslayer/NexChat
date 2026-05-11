@@ -1147,3 +1147,132 @@ html, body {
   border-color: transparent;
 }
 .profile-name-actions button:hover { transform: translateY(-1px); }
+
+/* ── Restored: light/dark theme toggle ───────────────────── */
+:root[data-theme="light"] {
+  --bg-deepest:   #F7F1DD;
+  --bg-deep:      #FFF8E3;
+  --bg-card:      #FFFDF5;
+  --bg-elevated:  #FFF4CC;
+  --bg-input:     #FFFFFF;
+  --bg-hover:     #FFF0B5;
+  --bg-active:    #FFEBA3;
+  --text-primary: #1A1405;
+  --text-sec:     #7A5C00;
+  --text-muted:   #9B7A1B;
+  --border:       rgba(122, 92, 0, 0.18);
+  --border-md:    rgba(184, 134, 11, 0.34);
+  --bubble-out:   #FFE57A;
+  --bubble-in:    #FFFDF7;
+}
+:root[data-theme="light"] body,
+:root[data-theme="light"] html {
+  background: var(--bg-deepest);
+  color: var(--text-primary);
+}
+:root[data-theme="light"] .chat-body,
+:root[data-theme="light"] .chat-empty {
+  background:
+    radial-gradient(circle at 20px 20px, rgba(122,92,0,0.08) 1px, transparent 1px),
+    var(--bg-deepest);
+  background-size: 32px 32px;
+}
+:root[data-theme="light"] .brand-logo,
+:root[data-theme="light"] .auth-logo-box,
+:root[data-theme="light"] .loading-logo-box,
+:root[data-theme="light"] .empty-logo {
+  background: linear-gradient(135deg, #FFF4B8, #FFD24D);
+}
+:root[data-theme="light"] .message-bubble.in {
+  box-shadow: 0 6px 18px rgba(122,92,0,0.08);
+}
+.theme-toggle-btn i { transition: transform var(--transition); }
+.theme-toggle-btn:hover i { transform: rotate(-16deg) scale(1.05); }
+
+/* ── Restored: profile photo crop / drag / zoom adjuster ─── */
+.photo-adjust-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 9998;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0,0,0,0.72);
+  backdrop-filter: blur(10px);
+  padding: 18px;
+}
+.photo-adjust-modal.show { display: flex; }
+.photo-adjust-card {
+  width: min(540px, 94vw);
+  background: var(--bg-card);
+  border: 1px solid var(--border-md);
+  border-radius: 24px;
+  overflow: hidden;
+  box-shadow: 0 28px 80px rgba(0,0,0,0.55), 0 0 50px rgba(255,215,0,0.08);
+}
+.photo-adjust-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--border);
+}
+.photo-adjust-header h3 {
+  font-size: 17px;
+  font-weight: 900;
+  color: var(--text-primary);
+}
+.photo-adjust-stage {
+  width: min(360px, calc(94vw - 42px));
+  height: min(360px, calc(94vw - 42px));
+  margin: 22px auto 12px;
+  border-radius: 28px;
+  overflow: hidden;
+  border: 2px solid var(--gold-2);
+  background: var(--bg-deepest);
+  cursor: grab;
+  touch-action: none;
+  box-shadow: 0 18px 45px rgba(0,0,0,0.32), 0 0 26px rgba(255,215,0,0.16);
+}
+.photo-adjust-stage:active { cursor: grabbing; }
+#photo-adjust-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.photo-adjust-help {
+  color: var(--text-sec);
+  font-size: 13px;
+  text-align: center;
+  padding: 0 18px 14px;
+}
+.photo-adjust-card .field-label {
+  display: block;
+  padding: 0 24px;
+}
+#photo-zoom-range {
+  width: calc(100% - 48px);
+  margin: 8px 24px 22px;
+  accent-color: var(--gold-1);
+}
+.photo-adjust-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+  padding: 16px 18px 20px;
+  background: rgba(255,215,0,0.08);
+  border-top: 1px solid var(--border);
+}
+.photo-adjust-actions .cancel { margin-top: 0; background: var(--bg-input); color: var(--text-primary); }
+.save-photo-btn {
+  width: auto;
+  min-width: 180px;
+  padding-left: 18px;
+  padding-right: 18px;
+}
+@media (max-width: 720px) {
+  .photo-adjust-card { border-radius: 22px; }
+  .photo-adjust-actions { justify-content: stretch; }
+  .photo-adjust-actions button { flex: 1; }
+  .save-photo-btn { min-width: 0; }
+}

@@ -67,6 +67,18 @@ let renderFrame      = null;
 let seenTimer        = null;
 let giphySearchTimer = null;
 let selectedGif      = null;
+let signupProfilePhotoDataUrl = "";
+let photoAdjustState = {
+  mode: "profile",
+  img: null,
+  zoom: 1,
+  minZoom: 1,
+  offsetX: 0,
+  offsetY: 0,
+  dragging: false,
+  lastX: 0,
+  lastY: 0
+};
 let contactCache     = new Map();
 let chatRenderVersion = 0;
 const RTC_CONFIG = {
@@ -79,6 +91,34 @@ const RTC_CONFIG = {
 //  DOM HELPER
 // ════════════════════════════════════════════════════════════
 const $ = id => document.getElementById(id);
+
+// ════════════════════════════════════════════════════════════
+//  THEME — restored dark / light toggle
+// ════════════════════════════════════════════════════════════
+const THEME_KEY = "nexchat_theme";
+function applyTheme(mode = "dark") {
+  const finalMode = mode === "light" ? "light" : "dark";
+  document.documentElement.setAttribute("data-theme", finalMode);
+  try { localStorage.setItem(THEME_KEY, finalMode); } catch (_) {}
+  const btn = $("theme-toggle-btn");
+  if (btn) {
+    btn.title = finalMode === "light" ? "Switch to dark mode" : "Switch to light mode";
+    btn.innerHTML = finalMode === "light" ? '<i class="fa-solid fa-sun"></i>' : '<i class="fa-solid fa-moon"></i>';
+  }
+}
+function initTheme() {
+  let saved = "dark";
+  try { saved = localStorage.getItem(THEME_KEY) || "dark"; } catch (_) {}
+  applyTheme(saved);
+}
+initTheme();
+window.toggleTheme = function() {
+  const current = document.documentElement.getAttribute("data-theme") || "dark";
+  const next = current === "light" ? "dark" : "light";
+  applyTheme(next);
+  showToast(next === "light" ? "Light mode enabled" : "Dark mode enabled");
+};
+
 // ════════════════════════════════════════════════════════════
 //  ESCAPE HTML — prevent XSS
 // ════════════════════════════════════════════════════════════
@@ -409,6 +449,7 @@ export function onAuthReady(user, isLoggedIn) {
 //  INIT APP UI — populate profile & avatar
 // ════════════════════════════════════════════════════════════
 async function initAppUI() {
+  initTheme();
   const name = displayUserName({ displayName: currentUser.displayName, email: currentUser.email, uid: currentUser.uid }, "NexUser");
   const photoURL = userPhotoURL(currentUser) || "";
   applyAvatar($("profile-av-big"), currentUser.uid, name, photoURL);
@@ -463,9 +504,10 @@ window.handleSignup = async function(e) {
   const email = $("signup-email").value.trim();
   const pass  = $("signup-password").value;
   const conf  = $("signup-confirm").value;
-  const photo = $("signup-photo")?.files?.[0] || null;
+  const rawPhoto = $("signup-photo")?.files?.[0] || null;
+  const photo = signupProfilePhotoDataUrl || rawPhoto || null;
   if (pass !== conf) { showErr("signup-error", "Passwords do not match."); return; }
-  if (photo && !photo.type.startsWith("image/")) { showErr("signup-error", "Profile picture must be an image."); return; }
+  if (rawPhoto && !rawPhoto.type.startsWith("image/")) { showErr("signup-error", "Profile picture must be an image."); return; }
   btn.disabled   = true;
   btn.textContent = "Creating account…";
   try {
@@ -1321,29 +1363,198 @@ window.captureCameraPhoto = async function() {
 // ════════════════════════════════════════════════════════════
 //  PROFILE PHOTOS + USER PROFILE VIEW
 // ════════════════════════════════════════════════════════════
+function readSelectedImage(file) {
+  return new Promise((resolve, reject) => {
+    if (!file || !file.type?.startsWith("image/")) {
+      reject(new Error("Profile picture must be an image."));
+      return;
+    }
+    if (file.size > 8 * 1024 * 1024) {
+      reject(new Error("Profile picture is too large. Maximum size is 8 MB."));
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error("Could not load selected picture."));
+      img.src = String(reader.result || "");
+    };
+    reader.onerror = () => reject(new Error("Could not read selected picture."));
+    reader.readAsDataURL(file);
+  });
+}
+
+function photoCanvasSize() {
+  const canvas = $("photo-adjust-canvas");
+  return canvas ? canvas.width : 360;
+}
+
+function clampPhotoOffsets() {
+  const st = photoAdjustState;
+  const size = photoCanvasSize();
+  if (!st.img) return;
+  const base = Math.max(size / st.img.width, size / st.img.height);
+  const scale = base * st.zoom;
+  const w = st.img.width * scale;
+  const h = st.img.height * scale;
+  const maxX = Math.max(0, (w - size) / 2);
+  const maxY = Math.max(0, (h - size) / 2);
+  st.offsetX = Math.max(-maxX, Math.min(maxX, st.offsetX));
+  st.offsetY = Math.max(-maxY, Math.min(maxY, st.offsetY));
+}
+
+function drawPhotoAdjust() {
+  const canvas = $("photo-adjust-canvas");
+  const st = photoAdjustState;
+  if (!canvas || !st.img) return;
+  const ctx = canvas.getContext("2d");
+  const size = canvas.width;
+  ctx.clearRect(0, 0, size, size);
+  ctx.fillStyle = "#111";
+  ctx.fillRect(0, 0, size, size);
+  clampPhotoOffsets();
+  const base = Math.max(size / st.img.width, size / st.img.height);
+  const scale = base * st.zoom;
+  const w = st.img.width * scale;
+  const h = st.img.height * scale;
+  const x = (size - w) / 2 + st.offsetX;
+  const y = (size - h) / 2 + st.offsetY;
+  ctx.drawImage(st.img, x, y, w, h);
+}
+
+async function openPhotoAdjust(file, mode = "profile") {
+  try {
+    const img = await readSelectedImage(file);
+    const size = photoCanvasSize();
+    const base = Math.max(size / img.width, size / img.height);
+    photoAdjustState = {
+      mode,
+      img,
+      zoom: 1,
+      minZoom: 1,
+      offsetX: 0,
+      offsetY: 0,
+      dragging: false,
+      lastX: 0,
+      lastY: 0
+    };
+    const range = $("photo-zoom-range");
+    if (range) { range.value = "1"; range.min = "1"; range.max = "3"; }
+    $("photo-adjust-modal")?.classList.add("show");
+    drawPhotoAdjust();
+  } catch (err) {
+    showToast(err.message || "Could not open selected picture.");
+  }
+}
+
+function bindPhotoAdjustEvents() {
+  const stage = $("photo-adjust-stage");
+  if (!stage || stage.dataset.bound === "1") return;
+  stage.dataset.bound = "1";
+  const point = (e) => {
+    const touch = e.touches?.[0] || e.changedTouches?.[0];
+    return { x: touch ? touch.clientX : e.clientX, y: touch ? touch.clientY : e.clientY };
+  };
+  const start = (e) => {
+    if (!photoAdjustState.img) return;
+    e.preventDefault();
+    const p = point(e);
+    photoAdjustState.dragging = true;
+    photoAdjustState.lastX = p.x;
+    photoAdjustState.lastY = p.y;
+  };
+  const move = (e) => {
+    if (!photoAdjustState.dragging) return;
+    e.preventDefault();
+    const p = point(e);
+    photoAdjustState.offsetX += p.x - photoAdjustState.lastX;
+    photoAdjustState.offsetY += p.y - photoAdjustState.lastY;
+    photoAdjustState.lastX = p.x;
+    photoAdjustState.lastY = p.y;
+    drawPhotoAdjust();
+  };
+  const end = () => { photoAdjustState.dragging = false; };
+  stage.addEventListener("mousedown", start);
+  window.addEventListener("mousemove", move);
+  window.addEventListener("mouseup", end);
+  stage.addEventListener("touchstart", start, { passive: false });
+  window.addEventListener("touchmove", move, { passive: false });
+  window.addEventListener("touchend", end);
+}
+
+function adjustedPhotoDataUrl() {
+  drawPhotoAdjust();
+  const canvas = $("photo-adjust-canvas");
+  if (!canvas) throw new Error("Photo editor not ready.");
+  let quality = 0.82;
+  let dataUrl = canvas.toDataURL("image/jpeg", quality);
+  while (dataUrl.length > 450000 && quality > 0.48) {
+    quality -= 0.08;
+    dataUrl = canvas.toDataURL("image/jpeg", quality);
+  }
+  return dataUrl;
+}
+
 window.chooseProfilePhoto = function() {
   $("profile-photo-input")?.click();
 };
+
+window.handleSignupPhotoSelect = async function(e) {
+  const file = e.target.files?.[0];
+  if (!file) return;
+  await openPhotoAdjust(file, "signup");
+};
+
 window.handleProfilePhotoSelect = async function(e) {
   const file = e.target.files?.[0];
-  e.target.value = "";
+  if (e.target) e.target.value = "";
   if (!file || !currentUser) return;
-  if (!file.type.startsWith("image/")) {
-    showToast("Profile picture must be an image.");
-    return;
+  await openPhotoAdjust(file, "profile");
+};
+
+window.updatePhotoZoom = function(value) {
+  const next = Number(value || 1);
+  if (!Number.isFinite(next)) return;
+  photoAdjustState.zoom = Math.max(1, Math.min(3, next));
+  drawPhotoAdjust();
+};
+
+window.closePhotoAdjust = function(resetInputs = true) {
+  $("photo-adjust-modal")?.classList.remove("show");
+  photoAdjustState.dragging = false;
+  if (resetInputs) {
+    const profileInp = $("profile-photo-input");
+    if (profileInp) profileInp.value = "";
   }
+};
+
+window.saveAdjustedProfilePhoto = async function() {
+  if (!photoAdjustState.img) return;
   try {
+    const dataUrl = adjustedPhotoDataUrl();
+    if (photoAdjustState.mode === "signup") {
+      signupProfilePhotoDataUrl = dataUrl;
+      closePhotoAdjust(false);
+      showToast("Profile picture ready ✅");
+      return;
+    }
+    if (!currentUser) return;
     showToast("Updating profile picture…");
-    const url = await updateUserProfilePhoto(currentUser.uid, file);
+    const url = await updateUserProfilePhoto(currentUser.uid, dataUrl);
     const displayName = $("profile-disp-name")?.textContent || currentUser.displayName || currentUser.email || "NexUser";
     rememberContact({ id: currentUser.uid, uid: currentUser.uid, name: displayName, email: currentUser.email, photoURL: url });
     applyAvatar($("profile-av-big"), currentUser.uid, displayName, url);
+    closePhotoAdjust(false);
     showToast("Profile picture updated ✅");
   } catch (err) {
     console.error("Profile photo error:", err);
     showToast(err.message || friendlyErr(err.code));
   }
 };
+
+bindPhotoAdjustEvents();
+
 window.showUserProfile = async function(uid = currentContactId) {
   if (!uid) return;
   try {

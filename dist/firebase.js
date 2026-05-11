@@ -688,6 +688,11 @@ function loadImageFromDataUrl(dataUrl) {
 
 async function profilePhotoToDataUrl(file) {
   if (!file) throw new Error("No profile photo selected.");
+  if (typeof file === "string") {
+    if (!file.startsWith("data:image/")) throw new Error("Profile picture must be an image.");
+    if (file.length > 700000) throw new Error("Profile picture is too large. Please zoom/crop or choose a smaller image.");
+    return file;
+  }
   const fileType = file.type || "";
   if (!fileType.startsWith("image/")) throw new Error("Profile picture must be an image.");
   if (file.size > 8 * 1024 * 1024) throw new Error("Profile picture is too large. Maximum size is 8 MB.");
