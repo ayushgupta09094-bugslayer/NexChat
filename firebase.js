@@ -24,8 +24,7 @@ import {
   deleteDoc,
   where,
   limit,
-  arrayUnion,
-  writeBatch
+  arrayUnion
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import { firebaseConfig, COLLECTIONS, CLOUDINARY_CONFIG } from "./config/config.js";
 import {
@@ -48,22 +47,6 @@ let unsubIncomingCalls = null;
 let presenceTimer    = null;
 let visibilityBound  = false;
 let activePresenceId = null;
-const userDocCache = new Map();
-const USER_DOC_CACHE_MS = 60000;
-
-async function getCachedUserDoc(uid, force = false) {
-  if (!uid) return null;
-  const cached = userDocCache.get(uid);
-  if (!force && cached && Date.now() - cached.time < USER_DOC_CACHE_MS) return cached.data;
-  const snap = await getDoc(doc(db, COLLECTIONS.USERS, uid));
-  const data = snap.exists() ? snap.data() : null;
-  if (data) userDocCache.set(uid, { data, time: Date.now() });
-  return data;
-}
-function rememberUserDoc(uid, data = {}) {
-  if (!uid || !data) return;
-  userDocCache.set(uid, { data: { ...(userDocCache.get(uid)?.data || {}), ...data }, time: Date.now() });
-}
 
 // ════════════════════════════════════════════════════════════
 //  AUTH — LISTENER
@@ -237,7 +220,6 @@ async function ensureUserDoc(user) {
       photoPublicId: finalPhotoPublicId
     });
   }
-  rememberUserDoc(user.uid, { ...old, ...writeData, name: finalName || old.name || bestStoredName({ email: finalEmail }) });
 }
 
 // ════════════════════════════════════════════════════════════
@@ -246,8 +228,20 @@ async function ensureUserDoc(user) {
 export async function signUp(name, email, password, profileFile = null) {
   const cred = await createUserWithEmailAndPassword(auth, email, password);
 
-  await updateProfile(cred.user, { displayName: name });
-  const profile = publicProfileFields(cred.user, { name, email });
+  let photoURL = "";
+  let photoPublicId = "";
+  if (profileFile) {
+    const fileType = profileFile.type || "";
+    if (!fileType.startsWith("image/")) throw new Error("Profile picture must be an image.");
+    if (profileFile.size > 5 * 1024 * 1024) throw new Error("Profile picture is too large. Maximum size is 5 MB.");
+    const cleanName = safeFileName(profileFile.name || `profile-${cred.user.uid}.jpg`);
+    const uploaded = await uploadToCloudinary(profileFile, `profiles/${cred.user.uid}`, cleanName, "nexchat,profile-photo");
+    photoURL = uploaded.url;
+    photoPublicId = uploaded.publicId;
+  }
+
+  await updateProfile(cred.user, { displayName: name, ...(photoURL ? { photoURL } : {}) });
+  const profile = publicProfileFields(cred.user, { name, email, photoURL, photoPublicId });
   const userData = {
     ...profile,
     searchTokens: makeSearchTokens(profile),
@@ -258,10 +252,6 @@ export async function signUp(name, email, password, profileFile = null) {
   };
   await setDoc(doc(db, COLLECTIONS.USERS, cred.user.uid), userData, { merge: true });
   await upsertUserLookup(cred.user, userData);
-  rememberUserDoc(cred.user.uid, userData);
-  if (profileFile) {
-    await updateUserProfilePhoto(cred.user.uid, profileFile);
-  }
   return cred.user;
 }
 
@@ -274,55 +264,32 @@ export async function signIn(email, password) {
 }
 
 export async function updateUserProfilePhoto(uid, file) {
-  if (!uid || !auth.currentUser || auth.currentUser.uid !== uid) {
-    throw new Error("You can only update your own profile picture.");
-  }
-  if (!file) throw new Error("No profile picture selected.");
-  if (!String(file.type || "").startsWith("image/")) throw new Error("Please choose an image file.");
-  if (file.size > 8 * 1024 * 1024) throw new Error("Profile picture must be under 8 MB.");
-
-  const uploaded = await uploadToCloudinary(file, `${uid}/profile`, "profile-picture.jpg", "nexchat,profile-photo");
+  if (!uid || !file) throw new Error("No profile photo selected.");
+  if (!auth.currentUser || auth.currentUser.uid !== uid) throw new Error("You can only update your own profile photo.");
+  const fileType = file.type || "";
+  if (!fileType.startsWith("image/")) throw new Error("Profile picture must be an image.");
+  if (file.size > 5 * 1024 * 1024) throw new Error("Profile picture is too large. Maximum size is 5 MB.");
+  const cleanName = safeFileName(file.name || `profile-${uid}.jpg`);
+  const uploaded = await uploadToCloudinary(file, `profiles/${uid}`, cleanName, "nexchat,profile-photo");
   await updateProfile(auth.currentUser, { photoURL: uploaded.url });
-
-  const userRef = doc(db, COLLECTIONS.USERS, uid);
-  const snap = await getDoc(userRef);
-  const old = snap.exists() ? (snap.data() || {}) : {};
+  const userSnap = await getDoc(doc(db, COLLECTIONS.USERS, uid));
+  const old = userSnap.exists() ? userSnap.data() : {};
   const profile = publicProfileFields(auth.currentUser, {
-    name: bestStoredName({ ...old, displayName: auth.currentUser.displayName, email: old.email || auth.currentUser.email }),
+    name: isRealName(old.name) ? old.name : (isRealName(auth.currentUser.displayName) ? auth.currentUser.displayName : bestStoredName({ email: old.email || auth.currentUser.email || "" })),
     email: old.email || auth.currentUser.email || "",
-    nexId: old.nexId || makeNexId(uid),
     photoURL: uploaded.url,
     photoPublicId: uploaded.publicId
   });
-
-  await setDoc(userRef, {
+  await setDoc(doc(db, COLLECTIONS.USERS, uid), {
+    ...old,
     ...profile,
     searchTokens: makeSearchTokens(profile),
+    photoURL: uploaded.url,
+    photoPublicId: uploaded.publicId,
     updatedAt: serverTimestamp()
   }, { merge: true });
-
   await upsertUserLookup(auth.currentUser, profile);
-  rememberUserDoc(uid, profile);
-
-  // Keep existing chat list avatars in sync where rules allow it.
-  try {
-    const chatsSnap = await getDocs(query(collection(db, COLLECTIONS.CHATS), where("members", "array-contains", uid)));
-    let batch = writeBatch(db);
-    let count = 0;
-    for (const chatDoc of chatsSnap.docs) {
-      const chat = chatDoc.data() || {};
-      batch.set(doc(db, COLLECTIONS.CHATS, chatDoc.id), {
-        memberPhotos: { ...(chat.memberPhotos || {}), [uid]: uploaded.url }
-      }, { merge: true });
-      count += 1;
-      if (count >= 450) { await batch.commit(); batch = writeBatch(db); count = 0; }
-    }
-    if (count) await batch.commit();
-  } catch (err) {
-    console.warn("Could not sync profile photo into old chats:", err);
-  }
-
-  return { ...profile, photoURL: uploaded.url, photoPublicId: uploaded.publicId };
+  return uploaded.url;
 }
 
 export async function updateUserDisplayName(uid, newName) {
@@ -568,7 +535,8 @@ export async function searchUsersByQuery(searchValue, currentUid) {
 //  USERS — Get single user data
 // ════════════════════════════════════════════════════════════
 export async function getUserData(uid) {
-  return getCachedUserDoc(uid);
+  const snap = await getDoc(doc(db, COLLECTIONS.USERS, uid));
+  return snap.exists() ? snap.data() : null;
 }
 
 // ════════════════════════════════════════════════════════════
@@ -602,21 +570,12 @@ export function startChatsListener(uid) {
 // ════════════════════════════════════════════════════════════
 async function bestNameForUid(uid, providedName = "") {
   try {
-    const data = await getCachedUserDoc(uid);
-    if (data) return bestStoredName(data);
+    const snap = await getDoc(doc(db, COLLECTIONS.USERS, uid));
+    if (snap.exists()) return bestStoredName(snap.data());
   } catch (err) {
     console.warn("Could not read user name for chat:", err);
   }
   return isRealName(providedName) ? String(providedName).trim() : "NexUser";
-}
-async function bestPhotoForUid(uid) {
-  try {
-    const data = await getCachedUserDoc(uid);
-    return data ? (data.photoURL || data.profilePhotoURL || data.profilePhoto || data.profilePic || "") : "";
-  } catch (err) {
-    console.warn("Could not read user photo for chat:", err);
-    return "";
-  }
 }
 
 export async function getOrCreateChat(myUid, myName, contactUid, contactName) {
@@ -628,18 +587,15 @@ export async function getOrCreateChat(myUid, myName, contactUid, contactName) {
   const myBestName = await bestNameForUid(myUid, myName);
   const contactBestName = await bestNameForUid(contactUid, contactName);
   const memberNames = { [myUid]: myBestName, [contactUid]: contactBestName };
-  const memberPhotos = { [myUid]: await bestPhotoForUid(myUid), [contactUid]: await bestPhotoForUid(contactUid) };
 
   try {
     const snap = await getDoc(chatRef);
     if (snap.exists()) {
       const old = snap.data() || {};
       const oldNames = old.memberNames || {};
-      const oldPhotos = old.memberPhotos || {};
       const needsNameFix = !isRealName(oldNames[myUid]) || !isRealName(oldNames[contactUid]) || oldNames[myUid] !== myBestName || oldNames[contactUid] !== contactBestName;
-      const needsPhotoFix = (memberPhotos[myUid] && oldPhotos[myUid] !== memberPhotos[myUid]) || (memberPhotos[contactUid] && oldPhotos[contactUid] !== memberPhotos[contactUid]);
-      if (needsNameFix || needsPhotoFix) {
-        await setDoc(chatRef, { memberNames: { ...oldNames, ...memberNames }, memberPhotos: { ...oldPhotos, ...memberPhotos } }, { merge: true });
+      if (needsNameFix) {
+        await setDoc(chatRef, { memberNames: { ...oldNames, ...memberNames } }, { merge: true });
       }
       return chatId;
     }
@@ -651,7 +607,6 @@ export async function getOrCreateChat(myUid, myName, contactUid, contactName) {
   await setDoc(chatRef, {
     members:         [myUid, contactUid],
     memberNames,
-    memberPhotos,
     lastMessage:     "",
     lastMessageTime: serverTimestamp(),
     lastSenderId:    "",
@@ -836,38 +791,32 @@ export function stopMessagesListener() {
 
 export async function markMessagesSeen(chatId, viewerId, messageIds = []) {
   if (!chatId || !viewerId || !Array.isArray(messageIds) || !messageIds.length) return;
-  const uniqueIds = [...new Set(messageIds)].filter(Boolean).slice(0, 200);
-  const batch = writeBatch(db);
-  uniqueIds.forEach(id => {
-    batch.update(doc(db, COLLECTIONS.CHATS, chatId, COLLECTIONS.MESSAGES, id), {
+  const uniqueIds = [...new Set(messageIds)].filter(Boolean).slice(0, 50);
+  await Promise.all(uniqueIds.map(id =>
+    updateDoc(doc(db, COLLECTIONS.CHATS, chatId, COLLECTIONS.MESSAGES, id), {
       seenBy: arrayUnion(viewerId)
-    });
-  });
-  await batch.commit().catch(err => console.warn("Could not mark messages seen:", err));
+    }).catch(err => console.warn("Could not mark message seen:", err))
+  ));
 }
 
 export async function deleteMessagesForMe(chatId, myUid, messageIds = []) {
   if (!chatId || !myUid || !Array.isArray(messageIds) || !messageIds.length) return;
-  const uniqueIds = [...new Set(messageIds)].filter(Boolean).slice(0, 450);
-  const batch = writeBatch(db);
-  uniqueIds.forEach(id => {
-    batch.update(doc(db, COLLECTIONS.CHATS, chatId, COLLECTIONS.MESSAGES, id), {
+  const uniqueIds = [...new Set(messageIds)].filter(Boolean);
+  await Promise.all(uniqueIds.map(id =>
+    updateDoc(doc(db, COLLECTIONS.CHATS, chatId, COLLECTIONS.MESSAGES, id), {
       deletedFor: arrayUnion(myUid)
-    });
-  });
-  await batch.commit();
+    })
+  ));
 }
 
 export async function deleteMessagesForEveryone(chatId, messageIds = []) {
   if (!chatId || !Array.isArray(messageIds) || !messageIds.length) return;
-  const uniqueIds = [...new Set(messageIds)].filter(Boolean).slice(0, 450);
-  const batch = writeBatch(db);
-  uniqueIds.forEach(id => batch.delete(doc(db, COLLECTIONS.CHATS, chatId, COLLECTIONS.MESSAGES, id)));
-  batch.update(doc(db, COLLECTIONS.CHATS, chatId), {
+  const uniqueIds = [...new Set(messageIds)].filter(Boolean);
+  await Promise.all(uniqueIds.map(id => deleteDoc(doc(db, COLLECTIONS.CHATS, chatId, COLLECTIONS.MESSAGES, id))));
+  await updateDoc(doc(db, COLLECTIONS.CHATS, chatId), {
     lastMessage: "Message deleted",
     lastMessageTime: serverTimestamp()
   });
-  await batch.commit();
 }
 
 export async function deleteMessages(chatId, messageIds = []) {
@@ -877,15 +826,8 @@ export async function deleteMessages(chatId, messageIds = []) {
 export async function deleteWholeChat(chatId) {
   if (!chatId) return;
   const msgSnap = await getDocs(collection(db, COLLECTIONS.CHATS, chatId, COLLECTIONS.MESSAGES));
-  let batch = writeBatch(db);
-  let count = 0;
-  for (const d of msgSnap.docs) {
-    batch.delete(d.ref);
-    count += 1;
-    if (count >= 450) { await batch.commit(); batch = writeBatch(db); count = 0; }
-  }
-  batch.delete(doc(db, COLLECTIONS.CHATS, chatId));
-  await batch.commit();
+  await Promise.all(msgSnap.docs.map(d => deleteDoc(d.ref)));
+  await deleteDoc(doc(db, COLLECTIONS.CHATS, chatId));
 }
 
 function blockDocId(blockerId, blockedId) {
@@ -933,7 +875,6 @@ export function startIncomingCallsListener(uid, callback) {
 
 export function stopIncomingCallsListener() {
   if (unsubIncomingCalls) { unsubIncomingCalls(); unsubIncomingCalls = null; }
-  userDocCache.clear();
 }
 
 export async function createCall({ chatId, callerId, callerName, calleeId, calleeName, type, offer }) {

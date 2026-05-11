@@ -29,7 +29,7 @@ export const COLLECTIONS = Object.freeze({
 
 export const CLOUDINARY_CONFIG = Object.freeze({
   cloudName: "dayaa7wrp",
-  uploadPreset: "nexchat_uploads",
+  uploadPreset: "NexChat_upload",
   folder: "nexchat_uploads"
 });
 
@@ -41,7 +41,7 @@ export const CLOUDINARY_CONFIG = Object.freeze({
 // ============================================================
 
 export const GIPHY_CONFIG = Object.freeze({
-  apiKey: "PomEiuc0Fd7irxhF6DuFvq4kn8HmRZcI",
+  apiKey: "YOUR_GIPHY_API_KEY",
   rating: "g",
   limit: 16
 });

@@ -67,18 +67,8 @@ let renderFrame      = null;
 let seenTimer        = null;
 let giphySearchTimer = null;
 let selectedGif      = null;
-let signupProfilePhotoFile = null;
-let profileCropTarget = null;
-let profileCropImage = null;
-let profileCropScale = 1;
-let profileCropOffset = { x: 0, y: 0 };
-let profileCropDrag = null;
-let chatSearchTimer = null;
 let contactCache     = new Map();
 let chatRenderVersion = 0;
-let messagesDelegated = false;
-let lastMessageRenderSignature = "";
-const MAX_RENDER_SIGNATURE_ITEMS = 500;
 const RTC_CONFIG = {
   iceServers: [
     { urls: "stun:stun.l.google.com:19302" },
@@ -88,16 +78,7 @@ const RTC_CONFIG = {
 // ════════════════════════════════════════════════════════════
 //  DOM HELPER
 // ════════════════════════════════════════════════════════════
-const domCache = new Map();
-const $ = id => {
-  if (!id) return null;
-  let el = domCache.get(id);
-  if (!el || !el.isConnected) {
-    el = document.getElementById(id);
-    if (el) domCache.set(id, el);
-  }
-  return el;
-};
+const $ = id => document.getElementById(id);
 // ════════════════════════════════════════════════════════════
 //  ESCAPE HTML — prevent XSS
 // ════════════════════════════════════════════════════════════
@@ -131,60 +112,33 @@ function avatarStyle(uid) {
 // ════════════════════════════════════════════════════════════
 //  TIME / DATE FORMATTERS
 // ════════════════════════════════════════════════════════════
-const fmtCache = new Map();
-const timeFmt = new Intl.DateTimeFormat([], { hour: "2-digit", minute: "2-digit" });
-const chatDateFmt = new Intl.DateTimeFormat([], { day: "2-digit", month: "short" });
-const dateLabelFmt = new Intl.DateTimeFormat([], { weekday: "long", month: "short", day: "numeric" });
-const lastSeenFmt = new Intl.DateTimeFormat([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
-function dateFromTs(ts) {
-  if (!ts) return null;
-  return ts.toDate ? ts.toDate() : new Date(ts);
-}
-function tsKey(ts) {
-  const d = dateFromTs(ts);
-  return d && !Number.isNaN(d.getTime()) ? d.getTime() : 0;
-}
-function cachedFmt(prefix, ts, compute) {
-  const key = `${prefix}:${tsKey(ts)}`;
-  if (fmtCache.has(key)) return fmtCache.get(key);
-  const value = compute();
-  if (fmtCache.size > 900) fmtCache.clear();
-  fmtCache.set(key, value);
-  return value;
-}
-function dayDiffFromNow(d) {
-  const start = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-  const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-  return Math.floor((today - start) / 86400000);
-}
 function fmtTime(ts) {
   if (!ts) return "";
-  return cachedFmt("time", ts, () => timeFmt.format(dateFromTs(ts)));
+  const d = ts.toDate ? ts.toDate() : new Date(ts);
+  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 function fmtChatTime(ts) {
   if (!ts) return "";
-  return cachedFmt("chat", ts, () => {
-    const d = dateFromTs(ts);
-    const diff = dayDiffFromNow(d);
-    if (diff === 0) return fmtTime(ts);
-    if (diff === 1) return "Yesterday";
-    return chatDateFmt.format(d);
-  });
+  const d   = ts.toDate ? ts.toDate() : new Date(ts);
+  const now = new Date();
+  if (now.toDateString() === d.toDateString()) return fmtTime(ts);
+  const diff = Math.floor((now - d) / 86400000);
+  if (diff === 1) return "Yesterday";
+  return d.toLocaleDateString([], { day: "2-digit", month: "short" });
 }
 function fmtDateLabel(ts) {
   if (!ts) return "Today";
-  return cachedFmt("label", ts, () => {
-    const d = dateFromTs(ts);
-    const diff = dayDiffFromNow(d);
-    if (diff === 0) return "Today";
-    if (diff === 1) return "Yesterday";
-    return dateLabelFmt.format(d);
-  });
+  const d   = ts.toDate ? ts.toDate() : new Date(ts);
+  const now = new Date();
+  if (now.toDateString() === d.toDateString()) return "Today";
+  const diff = Math.floor((now - d) / 86400000);
+  if (diff === 1) return "Yesterday";
+  return d.toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" });
 }
 function fmtLastSeen(ts) {
   if (!ts) return "a while ago";
-  return cachedFmt("seen", ts, () => lastSeenFmt.format(dateFromTs(ts)));
+  const d = ts.toDate ? ts.toDate() : new Date(ts);
+  return d.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 function userIsOnline(user = {}) {
   if (!user.lastActive) return false;
@@ -208,17 +162,22 @@ function rawSafeUrl(url = "") {
   return /^https:\/\//i.test(u) ? u : "";
 }
 function userPhotoURL(userOrUrl = "") {
-  if (!userOrUrl) return "";
   if (typeof userOrUrl === "string") return rawSafeUrl(userOrUrl);
-  const candidates = [
-    userOrUrl.photoURL,
-    userOrUrl.profilePhotoURL,
-    userOrUrl.profilePhoto,
-    userOrUrl.profilePic,
-    userOrUrl.avatarUrl,
-    userOrUrl.avatarURL
-  ];
-  return rawSafeUrl(candidates.find(Boolean) || "");
+  const u = userOrUrl || {};
+  return rawSafeUrl(
+    u.photoURL ||
+    u.profilePhotoURL ||
+    u.profilePhoto ||
+    u.profilePic ||
+    u.avatarURL ||
+    u.avatarUrl ||
+    u.avatar ||
+    u.picture ||
+    u.photo ||
+    u.imageUrl ||
+    u.imageURL ||
+    ""
+  );
 }
 function cloudinaryDownloadUrl(url = "", name = "nexchat-file") {
   const raw = rawSafeUrl(url);
@@ -231,18 +190,18 @@ function cloudinaryDownloadUrl(url = "", name = "nexchat-file") {
   return raw.replace("/upload/", `/upload/fl_attachment:${encodeURIComponent(baseName)}/`);
 }
 function avatarHTML(name = "", photoURL = "") {
-  const url = rawSafeUrl(photoURL);
-  return url ? `<img src="${esc(url)}" alt="${esc(name || "Profile picture")}" loading="lazy" decoding="async"/>` : esc(initials(name));
+  const src = rawSafeUrl(photoURL);
+  return src ? `<img src="${esc(src)}" alt="${esc(name || "User")}"/>` : esc(initials(name));
 }
 function avatarClass(photoURL = "") {
   return rawSafeUrl(photoURL) ? " has-photo" : "";
 }
 function applyAvatar(el, uid, name, photoURL, extraCss = "") {
   if (!el) return;
-  const url = rawSafeUrl(photoURL);
-  el.classList.toggle("has-photo", !!url);
-  el.style.cssText = (url ? "" : avatarStyle(uid)) + extraCss;
-  el.innerHTML = avatarHTML(name, url);
+  const hasPhoto = !!rawSafeUrl(photoURL);
+  el.classList.toggle("has-photo", hasPhoto);
+  el.style.cssText = (hasPhoto ? "" : avatarStyle(uid)) + extraCss;
+  el.innerHTML = avatarHTML(name, photoURL);
 }
 function publicUserId(user = {}) {
   const uid = String(user.uid || user.id || "");
@@ -348,7 +307,6 @@ function resetActiveChatUI() {
   currentContactId = null;
   currentContactData = null;
   currentMessages = [];
-  lastMessageRenderSignature = "";
   chatSearchQuery = "";
   selectionMode = false;
   selectedMessageIds.clear();
@@ -363,28 +321,6 @@ function resetActiveChatUI() {
   updateComposerState();
   document.querySelectorAll(".chat-item").forEach(el => el.classList.remove("active"));
 }
-// ════════════════════════════════════════════════════════════
-//  THEME — dark / light toggle
-// ════════════════════════════════════════════════════════════
-function applyTheme(theme = "dark") {
-  const clean = theme === "light" ? "light" : "dark";
-  document.documentElement.dataset.theme = clean;
-  localStorage.setItem("nexchat-theme", clean);
-  const icon = $("theme-toggle-icon");
-  const btn = $("theme-toggle-btn");
-  if (icon) icon.className = clean === "light" ? "fa-solid fa-moon" : "fa-solid fa-sun";
-  if (btn) btn.title = clean === "light" ? "Switch to dark mode" : "Switch to light mode";
-}
-function initTheme() {
-  const saved = localStorage.getItem("nexchat-theme");
-  const preferred = window.matchMedia?.("(prefers-color-scheme: light)")?.matches ? "light" : "dark";
-  applyTheme(saved || preferred);
-}
-window.toggleTheme = function() {
-  applyTheme(document.documentElement.dataset.theme === "light" ? "dark" : "light");
-};
-initTheme();
-
 // ════════════════════════════════════════════════════════════
 //  TOAST
 // ════════════════════════════════════════════════════════════
@@ -471,7 +407,6 @@ export function onAuthReady(user, isLoggedIn) {
 //  INIT APP UI — populate profile & avatar
 // ════════════════════════════════════════════════════════════
 async function initAppUI() {
-  bindMessageAreaDelegation();
   const name = displayUserName({ displayName: currentUser.displayName, email: currentUser.email, uid: currentUser.uid }, "NexUser");
   const photoURL = userPhotoURL(currentUser) || "";
   applyAvatar($("profile-av-big"), currentUser.uid, name, photoURL);
@@ -526,13 +461,13 @@ window.handleSignup = async function(e) {
   const email = $("signup-email").value.trim();
   const pass  = $("signup-password").value;
   const conf  = $("signup-confirm").value;
+  const photo = $("signup-photo")?.files?.[0] || null;
   if (pass !== conf) { showErr("signup-error", "Passwords do not match."); return; }
+  if (photo && !photo.type.startsWith("image/")) { showErr("signup-error", "Profile picture must be an image."); return; }
   btn.disabled   = true;
   btn.textContent = "Creating account…";
   try {
-    await signUp(name, email, pass, signupProfilePhotoFile);
-    signupProfilePhotoFile = null;
-    updateSignupPhotoPreview(null);
+    await signUp(name, email, pass, photo);
     showToast(`Welcome to NexChat, ${name}! 🎉⚡`);
   } catch (err) {
     showErr("signup-error", friendlyErr(err.code));
@@ -585,7 +520,6 @@ function renderUsersList(users, hasQuery = false) {
   }
 
   list.innerHTML = "";
-  const userFrag = document.createDocumentFragment();
 
   safeUsers.forEach(rawUser => {
     const u = rememberContact(rawUser) || rawUser;
@@ -617,9 +551,8 @@ function renderUsersList(users, hasQuery = false) {
       e.stopPropagation();
       showUserProfile(u.id);
     });
-    userFrag.appendChild(item);
+    list.appendChild(item);
   });
-  list.appendChild(userFrag);
 }
 
 window.filterUsers = function() {
@@ -677,7 +610,7 @@ function chatContactSummary(chat) {
   const cached = otherId ? contactCache.get(otherId) : null;
   const fallback = isRealDisplayName(memberName) ? memberName : "NexUser";
   const name = displayUserName(cached || { name: memberName }, fallback);
-  const photoURL = userPhotoURL(cached || {}) || userPhotoURL(chat.memberPhotos?.[otherId] || "");
+  const photoURL = userPhotoURL(cached || {});
   return { otherId, name, photoURL, cached };
 }
 
@@ -702,14 +635,9 @@ function renderChatsList(chats) {
   if (!list || !noMsg) return;
   chatRenderVersion += 1;
   const version = chatRenderVersion;
-  if (!chats.length) {
-    noMsg.style.display = "flex";
-    list.replaceChildren(noMsg);
-    return;
-  }
+  [...list.children].forEach(c => { if (c.id !== "no-chats-msg") c.remove(); });
+  if (!chats.length) { noMsg.style.display = "flex"; return; }
   noMsg.style.display = "none";
-  const chatFrag = document.createDocumentFragment();
-  const refreshQueue = [];
   chats.forEach(chat => {
     const { otherId, name: otherName, photoURL } = chatContactSummary(chat);
     if (!otherId) return;
@@ -734,11 +662,9 @@ function renderChatsList(chats) {
         </div>
       </div>`;
     div.onclick = () => openChat(otherId, cachedContactName(otherId, otherName));
-    chatFrag.appendChild(div);
-    refreshQueue.push(chat);
+    list.appendChild(div);
+    refreshChatContactInList(chat, version);
   });
-  list.replaceChildren(noMsg, chatFrag);
-  refreshQueue.forEach(chat => refreshChatContactInList(chat, version));
 }
 window.filterChats = function() {
   const q = $("chat-search").value.toLowerCase();
@@ -830,7 +756,6 @@ async function openChat(contactUid, contactName) {
   updateSelectionToolbar();
   updateComposerState();
   // Start listening to messages
-  lastMessageRenderSignature = "";
   startMessagesListener(currentChatId);
 }
 
@@ -878,45 +803,11 @@ document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") scheduleSeenMark();
 });
 
-function messageRenderSignature(messages, q) {
-  const selectedKey = selectionMode ? [...selectedMessageIds].sort().join(",") : "";
-  const parts = messages.slice(-MAX_RENDER_SIGNATURE_ITEMS).map(msg => [
-    msg.id,
-    msg.senderId,
-    msg.type,
-    msg.text,
-    msg.fileUrl,
-    msg.fileName,
-    msg.timestamp?.seconds || tsKey(msg.timestamp),
-    Array.isArray(msg.seenBy) ? msg.seenBy.join(",") : "",
-    Array.isArray(msg.deletedFor) ? msg.deletedFor.join(",") : ""
-  ].join("~"));
-  return [currentChatId, q, selectionMode ? "1" : "0", selectedKey, messages.length, parts.join("|")].join("||");
-}
-
-function bindMessageAreaDelegation() {
-  const area = $("messages-area");
-  if (!area || messagesDelegated) return;
-  messagesDelegated = true;
-  area.addEventListener("click", e => {
-    const downloadBtn = e.target.closest?.(".msg-download-btn");
-    if (downloadBtn) {
-      e.preventDefault();
-      e.stopPropagation();
-      downloadAttachment(downloadBtn.dataset.downloadUrl, downloadBtn.dataset.downloadName);
-      return;
-    }
-    const wrap = e.target.closest?.(".msg-wrap");
-    if (!wrap || !selectionMode) return;
-    if (e.target.closest("a")) return;
-    window.toggleMessageSelection(wrap.dataset.messageId);
-  });
-}
-
 function renderMessages() {
   const area = $("messages-area");
   if (!area) return;
   const shouldStick = area.scrollHeight - area.scrollTop - area.clientHeight < 180;
+  area.innerHTML = "";
 
   const q = String(chatSearchQuery || "").trim();
   const baseMsgs = visibleMessages();
@@ -924,41 +815,34 @@ function renderMessages() {
     ? baseMsgs.filter(msg => messageMatchesSearch(msg, q))
     : baseMsgs;
 
-  const signature = messageRenderSignature(displayMsgs, q);
-  if (signature === lastMessageRenderSignature) return;
-  lastMessageRenderSignature = signature;
-
-  const frag = document.createDocumentFragment();
-
   if (q) {
     const note = document.createElement("div");
     note.className = "search-result-note";
     note.innerHTML = `<i class="fa-solid fa-magnifying-glass"></i> ${displayMsgs.length} result${displayMsgs.length === 1 ? "" : "s"} for <strong>${esc(q)}</strong>`;
-    frag.appendChild(note);
+    area.appendChild(note);
   }
 
   let lastDateLabel = "";
-  for (const msg of displayMsgs) {
+  displayMsgs.forEach(msg => {
     const dLabel = fmtDateLabel(msg.timestamp);
     if (dLabel !== lastDateLabel) {
       lastDateLabel = dLabel;
       const sep = document.createElement("div");
       sep.className = "date-sep";
       sep.innerHTML = `<span>${dLabel}</span>`;
-      frag.appendChild(sep);
+      area.appendChild(sep);
     }
-    frag.appendChild(buildBubble(msg));
-  }
+    area.appendChild(buildBubble(msg));
+  });
 
   if (!displayMsgs.length) {
-    const sep = document.createElement("div");
-    sep.className = "date-sep";
-    sep.innerHTML = q ? '<span>No matching message found</span>' : '<span>Send your first message ⚡</span>';
-    frag.appendChild(sep);
+    area.innerHTML += q
+      ? '<div class="date-sep"><span>No matching message found</span></div>'
+      : '<div class="date-sep"><span>Send your first message ⚡</span></div>';
   }
 
+  // Restore typing indicator at bottom
   const tb = $("typing-bubble");
-  area.replaceChildren(frag);
   if (tb) area.appendChild(tb);
   if (shouldStick || !q) area.scrollTop = area.scrollHeight;
 }
@@ -1048,8 +932,7 @@ window.toggleChatSearch = function() {
 
 window.filterCurrentChatMessages = function() {
   chatSearchQuery = $("chat-search-input")?.value || "";
-  if (chatSearchTimer) clearTimeout(chatSearchTimer);
-  chatSearchTimer = setTimeout(() => scheduleRenderMessages(), 120);
+  renderMessages();
 };
 
 window.clearChatSearch = function() {
@@ -1119,7 +1002,7 @@ function buildAttachment(msg) {
   if (msg.type === "gif") {
     return `
       <a class="msg-image-link gif-link" href="${href}" target="_blank" rel="noopener noreferrer" title="Open GIF">
-        <img class="msg-image msg-gif" src="${href}" alt="${name}" loading="lazy" decoding="async"/>
+        <img class="msg-image msg-gif" src="${href}" alt="${name}" loading="lazy"/>
       </a>
       <div class="msg-file-name"><i class="fa-solid fa-film"></i> GIF${msg.gifTitle ? ` · ${esc(msg.gifTitle)}` : ""}</div>
       <div class="msg-media-actions">${downloadBtn}</div>`;
@@ -1128,7 +1011,7 @@ function buildAttachment(msg) {
   if (msg.type === "image" || type.startsWith("image/")) {
     return `
       <a class="msg-image-link" href="${href}" target="_blank" rel="noopener noreferrer" title="Open image">
-        <img class="msg-image" src="${href}" alt="${name}" loading="lazy" decoding="async"/>
+        <img class="msg-image" src="${href}" alt="${name}" loading="lazy"/>
       </a>
       <div class="msg-file-name">${name}${size ? ` · ${size}` : ""}</div>
       <div class="msg-media-actions">${downloadBtn}</div>`;
@@ -1166,6 +1049,18 @@ function buildBubble(msg) {
         ${isOut ? `<span class="b-ticks${seen ? " seen" : ""}" title="${seen ? "Seen" : "Sent"}"><i class="fa-solid fa-check-double"></i><small>${seen ? "Seen" : "Sent"}</small></span>` : ""}
       </div>
     </div>`;
+  wrap.addEventListener("click", e => {
+    if (!selectionMode) return;
+    if (e.target.closest("a") || e.target.closest(".msg-download-btn")) return;
+    window.toggleMessageSelection(msg.id);
+  });
+  wrap.querySelectorAll(".msg-download-btn").forEach(btn => {
+    btn.addEventListener("click", e => {
+      e.preventDefault();
+      e.stopPropagation();
+      downloadAttachment(btn.dataset.downloadUrl, btn.dataset.downloadName);
+    });
+  });
   return wrap;
 }
 window.downloadAttachment = async function(url, name = "nexchat-file") {
@@ -1212,7 +1107,7 @@ function renderGifResults(items = []) {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "gif-card";
-    btn.innerHTML = `<img src="${esc(image)}" alt="${esc(gif.title || "GIF")}" loading="lazy" decoding="async"/>`;
+    btn.innerHTML = `<img src="${esc(image)}" alt="${esc(gif.title || "GIF")}" loading="lazy"/>`;
     btn.addEventListener("click", () => sendSelectedGif({
       id: gif.id || "",
       title: gif.title || "GIF",
@@ -1422,158 +1317,31 @@ window.captureCameraPhoto = async function() {
 };
 
 // ════════════════════════════════════════════════════════════
-//  PROFILE PHOTO — crop/adjust and upload
+//  PROFILE PHOTOS + USER PROFILE VIEW
 // ════════════════════════════════════════════════════════════
-function updateSignupPhotoPreview(fileOrUrl) {
-  const box = $("signup-photo-preview");
-  const txt = $("signup-photo-text");
-  if (!box || !txt) return;
-  if (!fileOrUrl) {
-    box.innerHTML = '<i class="fa-solid fa-camera"></i>';
-    box.classList.remove("has-photo");
-    txt.textContent = "Add profile picture";
-    return;
-  }
-  const url = typeof fileOrUrl === "string" ? fileOrUrl : URL.createObjectURL(fileOrUrl);
-  box.innerHTML = `<img src="${esc(url)}" alt="Profile preview"/>`;
-  box.classList.add("has-photo");
-  txt.textContent = "Change profile picture";
-}
-function profilePhotoInput(target = "profile") {
-  profileCropTarget = target;
-  const input = target === "signup" ? $("signup-photo-input") : $("profile-photo-input");
-  if (!input) return;
-  input.value = "";
-  input.click();
-}
-window.chooseProfilePhoto = () => profilePhotoInput("profile");
-window.chooseSignupProfilePhoto = () => profilePhotoInput("signup");
-window.handleProfilePhotoPick = e => openProfileCrop(e.target.files?.[0], "profile");
-window.handleSignupProfilePhotoPick = e => openProfileCrop(e.target.files?.[0], "signup");
-function openProfileCrop(file, target = "profile") {
-  if (!file) return;
-  if (!file.type?.startsWith("image/")) {
-    showToast("Please choose an image file.");
-    return;
-  }
-  if (file.size > 8 * 1024 * 1024) {
-    showToast("Profile picture must be under 8 MB.");
-    return;
-  }
-  profileCropTarget = target;
-  const img = new Image();
-  img.onload = () => {
-    profileCropImage = img;
-    profileCropScale = 1;
-    profileCropOffset = { x: 0, y: 0 };
-    const slider = $("profile-crop-zoom");
-    if (slider) slider.value = "1";
-    $("profile-crop-modal")?.classList.add("show");
-    drawProfileCrop();
-  };
-  img.onerror = () => showToast("Could not read this image.");
-  img.src = URL.createObjectURL(file);
-}
-function drawProfileCrop() {
-  const canvas = $("profile-crop-canvas");
-  const img = profileCropImage;
-  if (!canvas || !img) return;
-  const ctx = canvas.getContext("2d");
-  const size = canvas.width = canvas.height = 320;
-  ctx.clearRect(0, 0, size, size);
-  ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue("--bg-input") || "#111";
-  ctx.fillRect(0, 0, size, size);
-  const base = Math.max(size / img.width, size / img.height);
-  const scale = base * profileCropScale;
-  const w = img.width * scale;
-  const h = img.height * scale;
-  const x = (size - w) / 2 + profileCropOffset.x;
-  const y = (size - h) / 2 + profileCropOffset.y;
-  ctx.drawImage(img, x, y, w, h);
-  ctx.strokeStyle = "rgba(255,215,0,.9)";
-  ctx.lineWidth = 3;
-  ctx.strokeRect(2, 2, size - 4, size - 4);
-}
-window.updateProfileCropZoom = function(value) {
-  profileCropScale = Number(value) || 1;
-  drawProfileCrop();
+window.chooseProfilePhoto = function() {
+  $("profile-photo-input")?.click();
 };
-function bindCropCanvasDrag() {
-  const canvas = $("profile-crop-canvas");
-  if (!canvas || canvas.dataset.bound === "1") return;
-  canvas.dataset.bound = "1";
-  const point = e => {
-    const t = e.touches?.[0] || e;
-    return { x: t.clientX, y: t.clientY };
-  };
-  const start = e => {
-    e.preventDefault();
-    const p = point(e);
-    profileCropDrag = { x: p.x, y: p.y, ox: profileCropOffset.x, oy: profileCropOffset.y };
-  };
-  const move = e => {
-    if (!profileCropDrag) return;
-    e.preventDefault();
-    const p = point(e);
-    profileCropOffset.x = profileCropDrag.ox + (p.x - profileCropDrag.x);
-    profileCropOffset.y = profileCropDrag.oy + (p.y - profileCropDrag.y);
-    drawProfileCrop();
-  };
-  const end = () => { profileCropDrag = null; };
-  canvas.addEventListener("mousedown", start);
-  window.addEventListener("mousemove", move);
-  window.addEventListener("mouseup", end);
-  canvas.addEventListener("touchstart", start, { passive: false });
-  window.addEventListener("touchmove", move, { passive: false });
-  window.addEventListener("touchend", end);
-}
-window.closeProfileCrop = function() {
-  $("profile-crop-modal")?.classList.remove("show");
-  profileCropImage = null;
-  profileCropDrag = null;
-};
-function canvasToBlob(canvas, type = "image/jpeg", quality = 0.88) {
-  return new Promise(resolve => canvas.toBlob(resolve, type, quality));
-}
-window.saveProfileCrop = async function() {
-  const canvas = $("profile-crop-canvas");
-  if (!canvas || !profileCropImage) return;
-  const out = document.createElement("canvas");
-  out.width = out.height = 512;
-  out.getContext("2d").drawImage(canvas, 0, 0, 512, 512);
-  const blob = await canvasToBlob(out);
-  if (!blob) return showToast("Could not prepare profile picture.");
-  const file = new File([blob], "profile-picture.jpg", { type: "image/jpeg" });
-  if (profileCropTarget === "signup") {
-    signupProfilePhotoFile = file;
-    updateSignupPhotoPreview(file);
-    closeProfileCrop();
-    showToast("Profile picture ready for signup ✅");
+window.handleProfilePhotoSelect = async function(e) {
+  const file = e.target.files?.[0];
+  e.target.value = "";
+  if (!file || !currentUser) return;
+  if (!file.type.startsWith("image/")) {
+    showToast("Profile picture must be an image.");
     return;
   }
-  if (!currentUser) return;
-  const saveBtn = $("profile-crop-save-btn");
-  if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = "Saving…"; }
   try {
-    const updated = await updateUserProfilePhoto(currentUser.uid, file);
-    const name = $("profile-disp-name")?.textContent || currentUser.displayName || currentUser.email || "NexUser";
-    applyAvatar($("profile-av-big"), currentUser.uid, name, updated.photoURL);
-    rememberContact({ ...(updated || {}), id: currentUser.uid, uid: currentUser.uid, email: currentUser.email });
-    renderChatsList(allChats);
-    closeProfileCrop();
+    showToast("Updating profile picture…");
+    const url = await updateUserProfilePhoto(currentUser.uid, file);
+    const displayName = $("profile-disp-name")?.textContent || currentUser.displayName || currentUser.email || "NexUser";
+    rememberContact({ id: currentUser.uid, uid: currentUser.uid, name: displayName, email: currentUser.email, photoURL: url });
+    applyAvatar($("profile-av-big"), currentUser.uid, displayName, url);
     showToast("Profile picture updated ✅");
   } catch (err) {
-    console.error("Profile photo update error:", err);
-    showToast(err?.message || "Could not update profile picture.", 5000);
-  } finally {
-    if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = "Save profile photo"; }
+    console.error("Profile photo error:", err);
+    showToast(err.message || friendlyErr(err.code));
   }
 };
-setTimeout(bindCropCanvasDrag, 0);
-
-// ════════════════════════════════════════════════════════════
-//  USER PROFILE VIEW
-// ════════════════════════════════════════════════════════════
 window.showUserProfile = async function(uid = currentContactId) {
   if (!uid) return;
   try {
@@ -1640,9 +1408,9 @@ window.handleUsernameUpdate = async function(e) {
     await updateUserDisplayName(currentUser.uid, newName);
     currentUser.displayName = newName;
     $("profile-disp-name").textContent = newName;
-    rememberContact({ id: currentUser.uid, uid: currentUser.uid, name: newName, email: currentUser.email });
-    const fresh = await getUserData(currentUser.uid).catch(() => null);
-    applyAvatar($("profile-av-big"), currentUser.uid, newName, userPhotoURL(fresh || currentUser));
+    const currentPhoto = userPhotoURL(contactCache.get(currentUser.uid)) || userPhotoURL(currentUser) || userPhotoURL({ photoURL: $("profile-av-big")?.querySelector("img")?.src || "" });
+    rememberContact({ id: currentUser.uid, uid: currentUser.uid, name: newName, email: currentUser.email, photoURL: currentPhoto });
+    applyAvatar($("profile-av-big"), currentUser.uid, newName, currentPhoto);
     cancelUsernameEdit();
     showToast("Username updated ✅");
   } catch (err) {
