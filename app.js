@@ -159,7 +159,9 @@ function safeLink(url = "") {
 }
 function rawSafeUrl(url = "") {
   const u = String(url || "");
-  return /^https:\/\//i.test(u) ? u : "";
+  // Profile pictures can be saved directly in Firestore as small data:image URLs,
+  // while chat uploads still use normal HTTPS Cloudinary links.
+  return (/^https:\/\//i.test(u) || /^data:image\//i.test(u)) ? u : "";
 }
 function userPhotoURL(userOrUrl = "") {
   if (typeof userOrUrl === "string") return rawSafeUrl(userOrUrl);

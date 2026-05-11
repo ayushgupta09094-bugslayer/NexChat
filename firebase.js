@@ -228,20 +228,17 @@ async function ensureUserDoc(user) {
 export async function signUp(name, email, password, profileFile = null) {
   const cred = await createUserWithEmailAndPassword(auth, email, password);
 
+  // Profile pictures are saved directly into Firestore as a small compressed
+  // data:image URL. This removes Cloudinary from the profile-photo flow and
+  // avoids the Unknown API key / upload preset errors while keeping Cloudinary
+  // for chat files, photos and GIF-related media.
   let photoURL = "";
-  let photoPublicId = "";
   if (profileFile) {
-    const fileType = profileFile.type || "";
-    if (!fileType.startsWith("image/")) throw new Error("Profile picture must be an image.");
-    if (profileFile.size > 5 * 1024 * 1024) throw new Error("Profile picture is too large. Maximum size is 5 MB.");
-    const cleanName = safeFileName(profileFile.name || `profile-${cred.user.uid}.jpg`);
-    const uploaded = await uploadToCloudinary(profileFile, `profiles/${cred.user.uid}`, cleanName, "nexchat,profile-photo");
-    photoURL = uploaded.url;
-    photoPublicId = uploaded.publicId;
+    photoURL = await profilePhotoToDataUrl(profileFile);
   }
 
-  await updateProfile(cred.user, { displayName: name, ...(photoURL ? { photoURL } : {}) });
-  const profile = publicProfileFields(cred.user, { name, email, photoURL, photoPublicId });
+  await updateProfile(cred.user, { displayName: name });
+  const profile = publicProfileFields(cred.user, { name, email, photoURL, photoPublicId: "" });
   const userData = {
     ...profile,
     searchTokens: makeSearchTokens(profile),
@@ -266,30 +263,30 @@ export async function signIn(email, password) {
 export async function updateUserProfilePhoto(uid, file) {
   if (!uid || !file) throw new Error("No profile photo selected.");
   if (!auth.currentUser || auth.currentUser.uid !== uid) throw new Error("You can only update your own profile photo.");
-  const fileType = file.type || "";
-  if (!fileType.startsWith("image/")) throw new Error("Profile picture must be an image.");
-  if (file.size > 5 * 1024 * 1024) throw new Error("Profile picture is too large. Maximum size is 5 MB.");
-  const cleanName = safeFileName(file.name || `profile-${uid}.jpg`);
-  const uploaded = await uploadToCloudinary(file, `profiles/${uid}`, cleanName, "nexchat,profile-photo");
-  await updateProfile(auth.currentUser, { photoURL: uploaded.url });
+
+  // Direct profile storage: compress image in the browser and save it in
+  // Firestore. No Cloudinary key or unsigned preset is used for profile photos.
+  const photoURL = await profilePhotoToDataUrl(file);
+
   const userSnap = await getDoc(doc(db, COLLECTIONS.USERS, uid));
   const old = userSnap.exists() ? userSnap.data() : {};
   const profile = publicProfileFields(auth.currentUser, {
     name: isRealName(old.name) ? old.name : (isRealName(auth.currentUser.displayName) ? auth.currentUser.displayName : bestStoredName({ email: old.email || auth.currentUser.email || "" })),
     email: old.email || auth.currentUser.email || "",
-    photoURL: uploaded.url,
-    photoPublicId: uploaded.publicId
+    nexId: old.nexId || makeNexId(uid),
+    photoURL,
+    photoPublicId: ""
   });
   await setDoc(doc(db, COLLECTIONS.USERS, uid), {
     ...old,
     ...profile,
     searchTokens: makeSearchTokens(profile),
-    photoURL: uploaded.url,
-    photoPublicId: uploaded.publicId,
+    photoURL,
+    photoPublicId: "",
     updatedAt: serverTimestamp()
   }, { merge: true });
   await upsertUserLookup(auth.currentUser, profile);
-  return uploaded.url;
+  return photoURL;
 }
 
 export async function updateUserDisplayName(uid, newName) {
@@ -669,6 +666,56 @@ export async function sendMsg(chatId, senderId, senderName, text) {
     lastSenderId:    senderId,
     lastSenderName:  senderName
   });
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("Could not read selected image."));
+    reader.readAsDataURL(file);
+  });
+}
+
+function loadImageFromDataUrl(dataUrl) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error("Could not load selected image."));
+    img.src = dataUrl;
+  });
+}
+
+async function profilePhotoToDataUrl(file) {
+  if (!file) throw new Error("No profile photo selected.");
+  const fileType = file.type || "";
+  if (!fileType.startsWith("image/")) throw new Error("Profile picture must be an image.");
+  if (file.size > 8 * 1024 * 1024) throw new Error("Profile picture is too large. Maximum size is 8 MB.");
+
+  const originalDataUrl = await readFileAsDataUrl(file);
+  const img = await loadImageFromDataUrl(originalDataUrl);
+  const maxSide = 360;
+  const scale = Math.min(1, maxSide / Math.max(img.width || maxSide, img.height || maxSide));
+  const width = Math.max(1, Math.round((img.width || maxSide) * scale));
+  const height = Math.max(1, Math.round((img.height || maxSide) * scale));
+
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(img, 0, 0, width, height);
+
+  let quality = 0.78;
+  let dataUrl = canvas.toDataURL("image/jpeg", quality);
+  // Keep the Firestore document comfortably under the 1 MiB document limit.
+  while (dataUrl.length > 450000 && quality > 0.45) {
+    quality -= 0.08;
+    dataUrl = canvas.toDataURL("image/jpeg", quality);
+  }
+  if (dataUrl.length > 700000) {
+    throw new Error("Profile picture is still too large after compression. Choose a smaller image.");
+  }
+  return dataUrl;
 }
 
 function safeFileName(name = "file") {

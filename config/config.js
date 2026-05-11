@@ -23,7 +23,8 @@ export const COLLECTIONS = Object.freeze({
 
 // ============================================================
 //  Cloudinary Configuration
-//  Used only for photo/file uploads.
+//  Used for chat photo/file uploads only.
+//  Profile photos are compressed and saved directly in Firestore.
 //  Create an unsigned upload preset in Cloudinary and paste it here.
 // ============================================================
 
